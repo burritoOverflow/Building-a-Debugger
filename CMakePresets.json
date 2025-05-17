@@ -1,0 +1,25 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "linux-debug",
+      "displayName": "Linux Debug",
+      "description": "Linux target",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "YES",
+        "CMAKE_VERBOSE_MAKEFILE": "YES",
+        "CMAKE_CXX_STANDARD": "17"
+      },
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    }
+  ]
+}
