@@ -1,9 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <csignal>
 #include <fstream>
-
-#include "libsdb/error.hpp"
-#include "libsdb/process.hpp"
+#include <libsdb/bit.hpp>
+#include <libsdb/error.hpp>
+#include <libsdb/pipe.hpp>
+#include <libsdb/process.hpp>
 
 namespace {
   bool ProcessExists(const pid_t pid) {
@@ -20,8 +21,11 @@ namespace {
     return ret != -1 and errno != ESRCH;
   }
 
+  /*
+   * Read the process status from the corresponding stat file
+   */
   char GetProcessStatus(const pid_t pid) {
-    // open the stat file for the given PID
+    // open the stat file for the given pid
     // we assume the process exists, as we're only to use this function
     // in the context of a running process with the provided PID
     std::ifstream stat("/proc/" + std::to_string(pid) + "/stat");
@@ -78,4 +82,46 @@ TEST_CASE("Process::Resume already terminated", "[process]") {
   proc->WaitOnSignal();
   // ensure that calling resume throws an exception
   REQUIRE_THROWS_AS(proc->Resume(), sdb::Error);
+}
+
+TEST_CASE("Write register works", "[register]") {
+  constexpr bool close_on_exec = false;
+  sdb::Pipe      channel(close_on_exec);
+  const auto     proc =
+      sdb::Process::Launch("targets/reg_write", true, channel.GetWriteFd());
+  channel.CloseWriteFd();
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  // test writing to a general purpose register
+  auto &regs = proc->GetRegisters();
+  regs.WriteById(sdb::RegisterID::rsi, 0xcafecafe);
+
+  // resume to the next trap
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  auto output = channel.Read();
+  REQUIRE(sdb::ToStringView(output) == "0xcafecafe");
+
+  // same case but for mm0 (MMX register)
+  regs.WriteById(sdb::RegisterID::mm0, 0xba5eba11);
+
+  // as above
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  output = channel.Read();
+  REQUIRE(sdb::ToStringView(output) == "0xba5eba11");
+
+  // SSE registers
+  regs.WriteById(sdb::RegisterID::xmm0, 42.24);
+
+  // as above
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  output = channel.Read();
+  REQUIRE(sdb::ToStringView(output) == "42.24");
 }

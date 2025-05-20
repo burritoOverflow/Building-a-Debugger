@@ -1,9 +1,8 @@
 #include <fcntl.h>
+#include <libsdb/error.hpp>
 #include <libsdb/pipe.hpp>
 #include <unistd.h>
 #include <utility>
-
-#include "libsdb/error.hpp"
 
 sdb::Pipe::Pipe(const bool close_on_exec) {
   // passing O_CLOEXEC if close_on_exec is true, so the pipe is closed when

@@ -1,11 +1,10 @@
-#include <libsdb/error.hpp>
-#include <libsdb/process.hpp>
 #include <csignal>
+#include <libsdb/error.hpp>
+#include <libsdb/pipe.hpp>
+#include <libsdb/process.hpp>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <unistd.h>
-
-#include "libsdb/pipe.hpp"
 
 namespace {
   void ExitWithPerror(const sdb::Pipe &channel, std::string const &prefix) {
@@ -15,6 +14,27 @@ namespace {
     exit(-1);
   }
 }  // namespace
+
+
+// Write the given data to the user area at the given offset
+void sdb::Process::WriteUserArea(const std::size_t   offset,
+                                 const std::uint64_t data) const {
+  if (ptrace(PTRACE_POKEUSER, this->pid_, offset, data) == -1) {
+    Error::SendErrno("Could not write to user area");
+  }
+}
+
+void sdb::Process::WriteFprs(const user_fpregs_struct &fprs) const {
+  if (ptrace(PTRACE_SETFPREGS, this->pid_, nullptr, &fprs) == -1) {
+    Error::SendErrno("Could not write FPRs");
+  }
+}
+
+void sdb::Process::WriteGprs(const user_regs_struct &gprs) const {
+  if (ptrace(PTRACE_SETREGS, this->pid_, nullptr, &gprs) == -1) {
+    Error::SendErrno("Could not write GPRs");
+  }
+}
 
 sdb::StopReason::StopReason(const int wait_status) {
   // if a given status represents an exit event
@@ -58,8 +78,10 @@ sdb::Process::~Process() {
   }
 }
 
+
 std::unique_ptr<sdb::Process> sdb::Process::Launch(
-    const std::filesystem::path &program_path, const bool debug) {
+    const std::filesystem::path &program_path, const bool debug,
+    std::optional<int> stdout_replacement) {
   // we want the pipe to be closed when we call execlp, so we
   // don't leave stale file descriptors
   Pipe channel(/*close_on_exec=*/true);
@@ -71,6 +93,15 @@ std::unique_ptr<sdb::Process> sdb::Process::Launch(
   // if we're in the child process, execute debugee
   if (pid == 0) {
     channel.CloseReadFd();  // we're not using the read end of the pipe
+
+    if (stdout_replacement) {
+      // replace stdout with the provided file descriptor
+      // closes the 2nd fd arg and duplicates the 1st to the 2nd,
+      // now, anything sent to stdout will be sent to the replacement fd
+      if (dup2(*stdout_replacement, STDOUT_FILENO) == -1) {
+        ExitWithPerror(channel, "stdout replacement failed");
+      }
+    }
 
     // attempt to attach to an existing process with the provided PID (only if
     // debugging is enabled)
@@ -138,5 +169,44 @@ sdb::StopReason sdb::Process::WaitOnSignal() {
   }
   const StopReason stop_reason(wait_status);
   this->state_ = stop_reason.reason;
+
+  if (this->is_attached_ and ProcessState::Stopped == this->state_) {
+    // if we're attached to the process and it's stopped, we shall
+    // read the registers
+    this->ReadAllRegisters();
+  }
+
   return stop_reason;
+}
+
+void sdb::Process::ReadAllRegisters() {
+  // get GPR registers
+  if (ptrace(PTRACE_GETREGS, this->pid_, nullptr,
+             &this->GetRegisters().data_.regs) == -1) {
+    Error::SendErrno("Could not read GPR registers");
+  }
+  // get FPR registers
+  if (ptrace(PTRACE_GETFPREGS, this->pid_, nullptr,
+             &this->GetRegisters().data_.i387) == -1) {
+    Error::SendErrno("Could not read FPR registers");
+  }
+
+  // read the debug registers
+  for (int i = 0; i < 8; ++i) {
+    const auto id = static_cast<int>(RegisterID::dr0) + i;
+    // get the register info
+    const auto &info = RegisterInfoByID(static_cast<RegisterID>(id));
+
+    errno = 0;
+    const std::int64_t data =
+        ptrace(PTRACE_PEEKUSER, this->pid_, info.offset, nullptr);
+
+    if (errno != 0) {
+      Error::SendErrno("Could not read debug register");
+    }
+
+    // write the retrieved data to the correct location in the
+    // registers_ member.
+    GetRegisters().data_.u_debugreg[i] = data;
+  }
 }
