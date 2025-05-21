@@ -124,4 +124,32 @@ TEST_CASE("Write register works", "[register]") {
 
   output = channel.Read();
   REQUIRE(sdb::ToStringView(output) == "42.24");
+
+  // st0 - location where the value is stored.
+  regs.WriteById(sdb::RegisterID::st0, 42.24l);
+  /*
+   * fsw - (FPU Status Word) - 16 bits wide - 11-13 track the top of the stack
+   *
+   * NOTE: (from book, verbatim) The top of the stack starts at index 0 and
+   * goes down instead of up, wrapping around up to 7.
+   * So, to push our value to the stack, we set bits 11 through 13 to 7 (0b111):
+   */
+  regs.WriteById(sdb::RegisterID::ftw, std::uint16_t{0b0011100000000000});
+
+  /*
+   * ftw - (FPU Tag Word)
+   * Also verbatim from the book:
+   *
+   * The 16-bit tag register tracks which of the st registers are
+   * valid, empty, or special (meaning they contain NaNs or infinity). A tag of
+   * 0b11 means empty, 0b00 means valid. So, we want to set the first tag to
+   * 0b00 and the rest to 0b11:
+   */
+  regs.WriteById(sdb::RegisterID::ftw, std::uint16_t{0b0011111111111111});
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  output = channel.Read();
+  REQUIRE(sdb::ToStringView(output) == "42.24");
 }

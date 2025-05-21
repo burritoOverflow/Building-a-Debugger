@@ -5,6 +5,7 @@
 .section .data
 hex_format:         .asciz "%#x"
 float_format:       .asciz "%.2f"
+long_float_format:  .asciz "%.2Lf"
 
 .section .text
 .macro trap
@@ -58,6 +59,28 @@ main:
     call printf@plt
     movq $0, %rdi
     call fflush@plt
+
+    trap
+
+    # NOTE:
+    # the SYSV ABI says that long double arguments must be passed on the function’s
+    # stack frame rather than using registers,
+    # so: manually push a value to the FPU stack from the
+    # debugger, call fstp in our assembly code to pop the value from the FPU
+    # stack onto our function stack, and then call printf with the long double specifier
+
+    # allocate 16 bytes on the stack to store the contents of st0
+    subq $16, %rsp
+    # pop st0 from the stack
+    fstpt (%rsp)
+    leaq long_float_format(%rip), %rdi
+    movq  $0, %rax
+    call printf@plt
+    movq $0, %rdi
+    call fflush@plt
+    # clean up the space allocated on the stack
+    # (increment stack pointer to original position)
+    addq $16, %rsp
 
     trap
 
