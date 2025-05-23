@@ -153,3 +153,36 @@ TEST_CASE("Write register works", "[register]") {
   output = channel.Read();
   REQUIRE(sdb::ToStringView(output) == "42.24");
 }
+
+TEST_CASE("Read register works", "[register]") {
+  const auto  proc = sdb::Process::Launch("targets/reg_read");
+  const auto &regs = proc->GetRegisters();
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  REQUIRE(regs.ReadByIdAs<std::uint64_t>(sdb::RegisterID::r13) == 0xcafecafe);
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  // 8-bit subregister
+  REQUIRE(regs.ReadByIdAs<std::uint8_t>(sdb::RegisterID::r13b) == 42);
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  REQUIRE(regs.ReadByIdAs<sdb::byte64>(sdb::RegisterID::mm0) ==
+          sdb::ToByte64(0xba5eba11ull));
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  REQUIRE(regs.ReadByIdAs<sdb::byte128>(sdb::RegisterID::xmm0) ==
+          sdb::ToByte128(64.125));
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  REQUIRE(regs.ReadByIdAs<long double>(sdb::RegisterID::st0) == 64.125L);
+}

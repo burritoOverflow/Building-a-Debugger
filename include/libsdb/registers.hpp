@@ -26,7 +26,7 @@ public:
     void  Write(const RegisterInfo &info, value value);
 
     template <class T>
-    T ReadByAs(const RegisterID id) const {
+    T ReadByIdAs(const RegisterID id) const {
       return std::get<T>(this->Read(RegisterInfoByID(id)));
     }
 
