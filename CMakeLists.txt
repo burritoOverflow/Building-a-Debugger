@@ -15,5 +15,6 @@ endif ()
 # find libedit
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(libedit REQUIRED IMPORTED_TARGET libedit)
+find_package(fmt CONFIG REQUIRED)
 
-target_link_libraries(sdb PRIVATE sdb::libsdb PkgConfig::libedit)
+target_link_libraries(sdb PRIVATE sdb::libsdb PkgConfig::libedit fmt::fmt)

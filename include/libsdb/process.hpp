@@ -52,6 +52,11 @@ public:
     pid_t        pid() const { return pid_; }
     ProcessState state() const { return state_; }
 
+    VirtualAddress GetPc() const {
+      return VirtualAddress{
+          this->GetRegisters().ReadByIdAs<std::uint64_t>(RegisterID::rip)};
+    }
+
 private:
     // for static members to construct a Process object
     Process(const pid_t pid, const bool terminate_on_end,
