@@ -1,10 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <csignal>
+#include <elf.h>
 #include <fstream>
 #include <libsdb/bit.hpp>
+#include <libsdb/breakpoint_site.hpp>
 #include <libsdb/error.hpp>
 #include <libsdb/pipe.hpp>
 #include <libsdb/process.hpp>
+#include <libsdb/types.hpp>
+#include <regex>
 
 namespace {
   bool ProcessExists(const pid_t pid) {
@@ -35,11 +39,83 @@ namespace {
     const auto idx_of_status_indicator   = index_of_last_parenthesis + 2;
     return data[idx_of_status_indicator];
   }
+
+  std::int64_t GetSectionLoadBias(const std::filesystem::path &path,
+                                  const Elf64_Addr             file_address) {
+    const auto       command = std::string("readelf -WS ") + path.string();
+    const auto       pipe    = popen(command.c_str(), "r");
+    const std::regex text_regex(R"(PROGBITS\s+(\w+)\s+(\w+)\s+(\w+))");
+    char            *line = nullptr;
+    std::size_t      len  = 0;
+
+    /*
+      Something like:
+      [16] .text             PROGBITS        0000000000001060 001060 000107 00
+      AX  0   0 16 The capture group in the block that follows will capture the
+      three whitespace-separated numbers that succeed 'PROGBITS'.
+      */
+    while (getline(&line, &len, pipe) != -1) {
+      if (std::cmatch groups; std::regex_search(line, groups, text_regex)) {
+        const auto address = std::stol(groups[1], nullptr, 16);
+        const auto offset  = std::stol(groups[2], nullptr, 16);
+        const auto size    = std::stol(groups[3], nullptr, 16);
+
+        // If the given file address lies in the range of the section address
+        // plus the section size, we clean up and return the section load bias.
+        if (address <= file_address and file_address < (address + size)) {
+          free(line);
+          pclose(pipe);
+          // return the load bias
+          return address - offset;
+        }
+      }
+      free(line);
+      line = nullptr;
+    }
+    pclose(pipe);
+    sdb::Error::Send("Could not find the section load bias");
+  }
+
+  std::int64_t GetEntryPointOffset(const std::filesystem::path &path) {
+    std::ifstream elf_file(path);
+
+    Elf64_Ehdr header;
+    elf_file.read(reinterpret_cast<char *>(&header), sizeof(header));
+
+    auto entry_file_address = header.e_entry;
+    auto load_bias          = GetSectionLoadBias(path, entry_file_address);
+
+    return entry_file_address - load_bias;
+  }
+
+  sdb::VirtualAddress GetLoadAddress(pid_t pid, std::int64_t offset) {
+    std::ifstream maps("/proc/" + std::to_string(pid) + "/maps");
+    // we're looking to match lines that look like this:
+    // 555555555000-555555556000 r-xp 00001000
+    std::regex map_regex(R"((\w+)-\w+ ..(.). (\w+))");
+
+    std::string data;
+
+    while (std::getline(maps, data)) {
+      std::smatch groups;
+      std::regex_search(data, groups, map_regex);
+
+      if (groups[2] == 'x') {  // line that is marked executable
+        auto low_range   = std::stol(groups[1], nullptr, 16);
+        auto file_offset = std::stol(groups[3], nullptr, 16);
+        // calculate the load address of the file offset by subtracting the file
+        // offset of the loaded segment w/in the original object file and adding
+        // the low virtual address of the mapped segment
+        return sdb::VirtualAddress(offset - file_offset + low_range);
+      }
+    }
+    sdb::Error::Send("Could not find load address for the given PID");
+  }
 }  // namespace
 
 TEST_CASE("Process::Launch success", "[process]") {
   const auto proc = sdb::Process::Launch("yes");
-  REQUIRE(ProcessExists(proc->pid()));
+  REQUIRE(ProcessExists(proc->GetPid()));
 }
 
 TEST_CASE("Process::Launch no such program", "[process]") {
@@ -50,24 +126,24 @@ TEST_CASE("Process::Attach success", "[process]") {
   // we don't want to attach here...
   // NOTE: when running this test, the executable expects `targets` in cwd
   const auto target = sdb::Process::Launch("targets/run_endlessly", false);
-  auto       proc   = sdb::Process::Attach(target->pid());
-  REQUIRE(GetProcessStatus(target->pid()) == 't');
+  auto       proc   = sdb::Process::Attach(target->GetPid());
+  REQUIRE(GetProcessStatus(target->GetPid()) == 't');
 }
 
 TEST_CASE("Process::Resume success", "[process]") {
   {
     const auto proc = sdb::Process::Launch("targets/run_endlessly");
     proc->Resume();
-    const auto status = GetProcessStatus(proc->pid());
+    const auto status = GetProcessStatus(proc->GetPid());
     // either running or sleeping
     const auto success = status == 'R' or status == 'S';
     REQUIRE(success);
   }
   {
     const auto target = sdb::Process::Launch("targets/run_endlessly", false);
-    const auto proc   = sdb::Process::Attach(target->pid());
+    const auto proc   = sdb::Process::Attach(target->GetPid());
     proc->Resume();
-    const auto status  = GetProcessStatus(proc->pid());
+    const auto status  = GetProcessStatus(proc->GetPid());
     const auto success = status == 'R' or status == 'S';
     REQUIRE(success);
   }
@@ -185,4 +261,163 @@ TEST_CASE("Read register works", "[register]") {
   proc->WaitOnSignal();
 
   REQUIRE(regs.ReadByIdAs<long double>(sdb::RegisterID::st0) == 64.125L);
+}
+
+TEST_CASE("Can create breakpoint site", "[breakpoint]") {
+  // verify that we can create a breakpoint site at a given address
+  // and that the registered address is the same as the one we provided
+  const auto  proc = sdb::Process::Launch("targets/run_endlessly");
+  const auto &site = proc->CreateBreakpointSite(sdb::VirtualAddress{42});
+  REQUIRE(site.Address().GetAddress() == 42);
+}
+
+// verify that each additional breakpoint site increments the id
+TEST_CASE("Breakpoint site ids increase", "[breakpoint]") {
+  const auto proc = sdb::Process::Launch("targets/run_endlessly");
+
+  const auto &s1 = proc->CreateBreakpointSite(sdb::VirtualAddress{42});
+  REQUIRE(s1.Address().GetAddress() == 42);
+
+  // subsequent breakpoint sites should have ids one greater than the previous
+  const auto &s2 = proc->CreateBreakpointSite(sdb::VirtualAddress{43});
+  REQUIRE(s2.Address().GetAddress() == 43);
+  REQUIRE(s2.GetId() == s1.GetId() + 1);
+
+  const auto &s3 = proc->CreateBreakpointSite(sdb::VirtualAddress{44});
+  REQUIRE(s3.Address().GetAddress() == 44);
+  REQUIRE(s3.GetId() == s1.GetId() + 2);
+
+  const auto &s4 = proc->CreateBreakpointSite(sdb::VirtualAddress{45});
+  REQUIRE(s4.Address().GetAddress() == 45);
+  REQUIRE(s4.GetId() == s1.GetId() + 3);
+}
+
+TEST_CASE("Can find breakpoint sites", "[breakpoint]") {
+  auto        proc  = sdb::Process::Launch("targets/run_endlessly");
+  const auto &cproc = proc;
+
+  proc->CreateBreakpointSite(sdb::VirtualAddress{42});
+  proc->CreateBreakpointSite(sdb::VirtualAddress{43});
+  proc->CreateBreakpointSite(sdb::VirtualAddress{44});
+  proc->CreateBreakpointSite(sdb::VirtualAddress{45});
+
+  auto &s1 = proc->GetBreakpointSites().GetByAddress(sdb::VirtualAddress{44});
+  REQUIRE(proc->GetBreakpointSites().ContainsAddress(sdb::VirtualAddress{44}));
+  REQUIRE(s1.Address().GetAddress() == 44);
+
+  auto &cs1 = cproc->GetBreakpointSites().GetByAddress(sdb::VirtualAddress{44});
+  REQUIRE(cproc->GetBreakpointSites().ContainsAddress(sdb::VirtualAddress{44}));
+  REQUIRE(cs1.Address().GetAddress() == 44);
+
+  auto &s2 = proc->GetBreakpointSites().GetById(s1.GetId() + 1);
+  REQUIRE(proc->GetBreakpointSites().ContainsId(s1.GetId() + 1));
+  REQUIRE(s2.GetId() == s1.GetId() + 1);
+  REQUIRE(s2.Address().GetAddress() == 45);
+
+  auto &cs2 = cproc->GetBreakpointSites().GetById(cs1.GetId() + 1);
+  REQUIRE(cproc->GetBreakpointSites().ContainsId(cs1.GetId() + 1));
+  REQUIRE(cs2.GetId() == cs1.GetId() + 1);
+  REQUIRE(cs2.Address().GetAddress() == 45);
+}
+
+TEST_CASE("Cannot find non-existing breakpoint sites", "[breakpoint]") {
+  auto        proc  = sdb::Process::Launch("targets/run_endlessly");
+  const auto &cproc = proc;
+
+  // verify that these methods throw if provided a breakpoint site that does not
+  // exist
+  REQUIRE_THROWS_AS(
+      proc->GetBreakpointSites().GetByAddress(sdb::VirtualAddress{44}),
+      sdb::Error);
+  REQUIRE_THROWS_AS(cproc->GetBreakpointSites().GetById(44), sdb::Error);
+  REQUIRE_THROWS_AS(
+      cproc->GetBreakpointSites().GetByAddress(sdb::VirtualAddress{44}),
+      sdb::Error);
+  REQUIRE_THROWS_AS(cproc->GetBreakpointSites().GetById(44), sdb::Error);
+}
+
+TEST_CASE("Breakpoint list size and emptiness", "[breakpoint]") {
+  auto        proc  = sdb::Process::Launch("targets/run_endlessly");
+  const auto &cproc = proc;
+
+  REQUIRE(proc->GetBreakpointSites().IsEmpty());
+  REQUIRE(proc->GetBreakpointSites().Size() == 0);
+  REQUIRE(cproc->GetBreakpointSites().IsEmpty());
+  REQUIRE(cproc->GetBreakpointSites().Size() == 0);
+
+  proc->CreateBreakpointSite(sdb::VirtualAddress{42});
+  REQUIRE(!proc->GetBreakpointSites().IsEmpty());
+  REQUIRE(proc->GetBreakpointSites().Size() == 1);
+  REQUIRE(!cproc->GetBreakpointSites().IsEmpty());
+  REQUIRE(cproc->GetBreakpointSites().Size() == 1);
+
+  proc->CreateBreakpointSite(sdb::VirtualAddress{43});
+  REQUIRE(!proc->GetBreakpointSites().IsEmpty());
+  REQUIRE(proc->GetBreakpointSites().Size() == 2);
+  REQUIRE(!cproc->GetBreakpointSites().IsEmpty());
+  REQUIRE(cproc->GetBreakpointSites().Size() == 2);
+}
+
+TEST_CASE("Can iterate breakpoint sizes", "[breakpoint]") {
+  auto        proc  = sdb::Process::Launch("targets/run_endlessly");
+  const auto &cproc = proc;
+
+  proc->CreateBreakpointSite(sdb::VirtualAddress{42});
+  proc->CreateBreakpointSite(sdb::VirtualAddress{43});
+  proc->CreateBreakpointSite(sdb::VirtualAddress{44});
+  proc->CreateBreakpointSite(sdb::VirtualAddress{45});
+
+  proc->GetBreakpointSites().ForEach(
+      [addr = 42](auto &site) mutable
+      { REQUIRE(site.Address().GetAddress() == addr++); });
+
+  cproc->GetBreakpointSites().ForEach(
+      [addr = 42](const auto &site) mutable
+      { REQUIRE(site.Address().GetAddress() == addr++); });
+}
+
+TEST_CASE("Breakpoint on address works", "[breakpoint]") {
+  bool      close_on_exec = false;
+  sdb::Pipe channel(close_on_exec);
+
+  const std::filesystem::path target_path = "targets/hello_sdb";
+
+  auto proc = sdb::Process::Launch(target_path, true, channel.GetWriteFd());
+  channel.CloseWriteFd();
+
+  const auto offset       = GetEntryPointOffset(target_path);
+  const auto load_address = GetLoadAddress(proc->GetPid(), offset);
+
+  proc->CreateBreakpointSite(load_address).Enable();
+  proc->Resume();
+  auto reason = proc->WaitOnSignal();
+
+  REQUIRE(reason.reason == sdb::ProcessState::Stopped);
+  REQUIRE(reason.info == SIGTRAP);
+  REQUIRE(proc->GetPc() == load_address);
+
+  proc->Resume();
+  reason = proc->WaitOnSignal();
+
+  REQUIRE(reason.reason == sdb::ProcessState::Exited);
+  // check that the process exited successfully
+  REQUIRE(reason.info == 0);
+
+  const auto data = channel.Read();
+  // expected output sent to stdout for this test target
+  REQUIRE(sdb::ToStringView(data) == "Hello, sdb!\n");
+}
+
+TEST_CASE("Can remove breakpoint sites", "[breakpoint]") {
+  const auto  proc = sdb::Process::Launch("targets/run_endlessly");
+  const auto &site = proc->CreateBreakpointSite(sdb::VirtualAddress{42});
+  proc->CreateBreakpointSite(sdb::VirtualAddress{43});
+
+  REQUIRE(proc->GetBreakpointSites().Size() == 2);
+
+  // verify both remove APIs function as intended
+  proc->GetBreakpointSites().RemoveById(site.GetId());
+  REQUIRE(proc->GetBreakpointSites().Size() == 1);
+  proc->GetBreakpointSites().RemoveByAddress(sdb::VirtualAddress{43});
+  REQUIRE(proc->GetBreakpointSites().IsEmpty());
 }

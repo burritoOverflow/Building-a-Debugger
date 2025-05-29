@@ -2,6 +2,7 @@
 #include <libsdb/error.hpp>
 #include <libsdb/pipe.hpp>
 #include <libsdb/process.hpp>
+#include <sys/personality.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -92,6 +93,8 @@ std::unique_ptr<sdb::Process> sdb::Process::Launch(
 
   // if we're in the child process, execute debugee
   if (pid == 0) {
+    // disable address space randomization for the newly launched child process
+    personality(ADDR_NO_RANDOMIZE);
     channel.CloseReadFd();  // we're not using the read end of the pipe
 
     if (stdout_replacement) {
@@ -105,6 +108,7 @@ std::unique_ptr<sdb::Process> sdb::Process::Launch(
 
     // attempt to attach to an existing process with the provided PID (only if
     // debugging is enabled)
+    // indicate that this process is to be traced by the parent process
     if (debug and
         ptrace(PTRACE_TRACEME, pid, /*addr=*/nullptr, /*data=*/nullptr) == -1) {
       ExitWithPerror(channel, "Tracing failed");
@@ -120,8 +124,8 @@ std::unique_ptr<sdb::Process> sdb::Process::Launch(
   channel.CloseReadFd();
 
   // if data is present on the read end of the pipe, we wait for the child
-  // process to terminate and send an error message w/ the given message. When
-  // there's an error in the child process, the parent process will throw.
+  // process to terminate and send an error message w/ the given message.
+  // When there's an error in the child process, the parent process will throw.
   if (!data.empty()) {
     waitpid(pid, nullptr, 0);
     const auto chars = reinterpret_cast<char *>(data.data());
@@ -152,8 +156,55 @@ std::unique_ptr<sdb::Process> sdb::Process::Attach(const pid_t pid) {
   return process;
 }
 
-// Force process to resume and update its tracked running state
+sdb::StopReason sdb::Process::StepInstruction() {
+  std::optional<BreakpointSite *> to_reenable;
+  auto                            pc = this->GetPc();
+
+  if (this->breakpoint_sites_.EnabledStopPointAtAddress(pc)) {
+    auto &bp = this->breakpoint_sites_.GetByAddress(pc);
+    // disable the breakpoint so we can step over it
+    bp.Disable();
+    // store this breakpoint site so we can re-enable it later
+    to_reenable = &bp;
+  }
+
+  // step over instruction and wait
+  if (ptrace(PTRACE_SINGLESTEP, this->pid_, nullptr, nullptr) == -1) {
+    Error::SendErrno("Could not single step");
+  }
+
+  const auto reason = this->WaitOnSignal();
+  // re-enable if we disabled
+  if (to_reenable) {
+    to_reenable.value()->Enable();
+  }
+
+  return reason;
+}
+
+// Force the process to resume and update its tracked running state
 void sdb::Process::Resume() {
+  // if the process is currently stopped at a breakpoint, we should step over
+  // the breakpoint
+  if (const auto pc = this->GetPc();
+      this->breakpoint_sites_.EnabledStopPointAtAddress(pc)) {
+    auto &bp = this->breakpoint_sites_.GetByAddress(pc);
+    bp.Disable();
+    // execute a single instruction
+    if (ptrace(PTRACE_SINGLESTEP, this->pid_, nullptr, nullptr) == -1) {
+      Error::SendErrno("Failed to single step");
+    }
+
+    int wait_status;
+    // wait until the inferior has executed the instruction and halted
+    if (waitpid(this->pid_, &wait_status, 0) == -1) {
+      Error::SendErrno("waitpid failed");
+    }
+    // then re-enable the breakpoint
+    bp.Enable();
+  }
+
+  // and continue the process
   if (ptrace(PTRACE_CONT, this->pid_, nullptr, nullptr) == -1) {
     // exit if we can't resume the process
     Error::SendErrno("Could not resume");
@@ -170,10 +221,18 @@ sdb::StopReason sdb::Process::WaitOnSignal() {
   const StopReason stop_reason(wait_status);
   this->state_ = stop_reason.reason;
 
-  if (this->is_attached_ and ProcessState::Stopped == this->state_) {
-    // if we're attached to the process and it's stopped, we shall
+  if (this->is_attached_ and this->state() == ProcessState::Stopped) {
+    // if we're attached to the process, and it's stopped, we
     // read the registers
     this->ReadAllRegisters();
+
+    // if the process stopped due to SIGTRAP and the addr 1 byte below the PC
+    // is an enabled breakpoint, we fix up the PC to point to the breakpoint
+    const auto instruction_begin = this->GetPc() - 1;
+    if (stop_reason.info == SIGTRAP and
+        this->breakpoint_sites_.EnabledStopPointAtAddress(instruction_begin)) {
+      this->SetPc(instruction_begin);
+    }
   }
 
   return stop_reason;
@@ -209,4 +268,15 @@ void sdb::Process::ReadAllRegisters() {
     // registers_ member.
     GetRegisters().data_.u_debugreg[i] = data;
   }
+}
+
+sdb::BreakpointSite &sdb::Process::CreateBreakpointSite(
+    const VirtualAddress address) {
+  if (this->breakpoint_sites_.ContainsAddress(address)) {
+    Error::Send("Breakpoint site already created at this address" +
+                std::to_string(address.GetAddress()));
+  }
+
+  return this->breakpoint_sites_.Push(
+      std::unique_ptr<BreakpointSite>(new BreakpointSite(*this, address)));
 }

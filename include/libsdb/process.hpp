@@ -2,7 +2,9 @@
 #define SDB_PROCESS_HPP
 
 #include <filesystem>
+#include <libsdb/breakpoint_site.hpp>
 #include <libsdb/registers.hpp>
+#include <libsdb/stoppoint_collection.hpp>
 #include <memory>
 #include <optional>
 
@@ -47,14 +49,32 @@ public:
     // Resume a currently halted process
     void Resume();
 
+    StopReason StepInstruction();
+
     StopReason WaitOnSignal();
 
-    pid_t        pid() const { return pid_; }
+    pid_t        GetPid() const { return pid_; }
     ProcessState state() const { return state_; }
 
     VirtualAddress GetPc() const {
       return VirtualAddress{
           this->GetRegisters().ReadByIdAs<std::uint64_t>(RegisterID::rip)};
+    }
+
+    // Write the given address to the program counter (RIP)
+    void SetPc(VirtualAddress address) {
+      this->GetRegisters().WriteById(RegisterID::rip, address.GetAddress());
+    }
+
+    // create a breakpoint site at the given address
+    BreakpointSite &CreateBreakpointSite(VirtualAddress address);
+
+    StoppointCollection<BreakpointSite> &GetBreakpointSites() {
+      return this->breakpoint_sites_;
+    }
+
+    const StoppointCollection<BreakpointSite> &GetBreakpointSites() const {
+      return this->breakpoint_sites_;
     }
 
 private:
@@ -75,6 +95,8 @@ private:
     ProcessState state_ = ProcessState::Stopped;
 
     std::unique_ptr<Registers> registers_;
+
+    StoppointCollection<BreakpointSite> breakpoint_sites_;
   };
 }  // namespace sdb
 

@@ -19,11 +19,22 @@ namespace {
     return std::equal(str.begin(), str.end(), of.begin());
   }
 
+  // show help for commands and the various subcommands
   void PrintHelp(const std::vector<std::string> &args) {
     if (args.size() == 1) {
       std::cerr << R"(Available commands:
+        breakpoint - Commands for operating on breakpoints
         continue - Resume the process
         register - Commands for operating on registers
+        step - Step over a single instruction
+)";
+    } else if (IsPrefix(args[1], "breakpoint")) {
+      std::cerr << R"(Available commands:
+        list
+        delete <id>
+        disable <id>
+        enable <id>
+        set <address>
 )";
     } else if (IsPrefix(args[1], "register")) {
       std::cerr << R"(Available commands:
@@ -57,7 +68,9 @@ namespace {
     }
     // Otherwise, passing program name
     const char *program_path = argv[1];
-    return sdb::Process::Launch(program_path);
+    auto        proc         = sdb::Process::Launch(program_path);
+    fmt::print("Launched process with PID {}\n", proc->GetPid());
+    return proc;
   }
 
   void PrintStopReason(const sdb::Process   &process,
@@ -81,7 +94,7 @@ namespace {
       default:;
     }
 
-    fmt::print("Process {}: {}\n", process.pid(), message);
+    fmt::print("Process {}: {}\n", process.GetPid(), message);
   }
 
   sdb::Registers::value ParseRegisterValue(const sdb::RegisterInfo &info,
@@ -108,7 +121,8 @@ namespace {
       } else if (info.format == sdb::RegisterFormat::VECTOR) {
         if (info.size == 8) {
           return sdb::ParseVector<8>(text);
-        } else if (info.size == 16) {
+        }
+        if (info.size == 16) {
           return sdb::ParseVector<16>(text);
         }
       }
@@ -158,7 +172,6 @@ namespace {
         fmt::print("{}:\t{}\n", info.name, std::visit(format, value));
       } catch (sdb::Error &err) {
         std::cerr << "No such register\n";
-        return;
       }
     } else {
       PrintHelp({"help", "register"});
@@ -197,6 +210,67 @@ namespace {
     }
   }
 
+
+  void HandleBreakpointCommand(
+      std::unique_ptr<sdb::Process>::element_type &process,
+      const std::vector<std::string>              &args) {
+    if (args.size() < 2) {
+      PrintHelp({"help", "breakpoint"});
+      return;
+    }
+
+    auto command = args[1];
+
+    if (IsPrefix(command, "list")) {
+      if (process.GetBreakpointSites().IsEmpty()) {
+        fmt::print("No breakpoints set\n");
+      } else {
+        fmt::print("Current breakpoints:\n");
+        process.GetBreakpointSites().ForEach(
+            [](const auto &site)
+            {
+              fmt::print("{}: address - {:#x}, {}\n", site.GetId(),
+                         site.Address().GetAddress(),
+                         site.IsEnabled() ? "enabled" : "disabled");
+            });
+      }
+    }
+
+    if (args.size() < 3) {
+      PrintHelp({"help", "breakpoint"});
+      return;
+    }
+
+    if (IsPrefix(command, "set")) {
+      auto address = sdb::ToIntegral<std::uint64_t>(args[2], 16);
+
+      if (!address) {
+        fmt::print(stderr,
+                   "Breakpoint command expects address "
+                   "in hexadecimal, prefixed with '0x'\n");
+        return;
+      }
+
+      process.CreateBreakpointSite(sdb::VirtualAddress{*address}).Enable();
+      return;
+    }
+
+    const auto id = sdb::ToIntegral<sdb::BreakpointSite::id_type>(args[2]);
+    if (!id) {
+      std::cerr << "Breakpoint command expects breakpoint ID in decimal\n";
+      return;
+    }
+
+    // Handle remaining cases for enabling, disabling and deleting
+    if (IsPrefix(command, "enable")) {
+      process.GetBreakpointSites().GetById(*id).Enable();
+    } else if (IsPrefix(command, "diable")) {
+      process.GetBreakpointSites().GetById(*id).Disable();
+    } else if (IsPrefix(command, "delete")) {
+      process.GetBreakpointSites().RemoveById(*id);
+    }
+  }
+
   void HandleCommand(const std::unique_ptr<sdb::Process> &process,
                      const std::string_view               line) {
     const auto  args    = Split(line, ' ');
@@ -208,6 +282,11 @@ namespace {
       PrintStopReason(*process, reason);
     } else if (IsPrefix(command, "register")) {
       HandleRegisterCommand(*process, args);
+    } else if (IsPrefix(command, "breakpoint")) {
+      HandleBreakpointCommand(*process, args);
+    } else if (IsPrefix(command, "step")) {
+      const auto reason = process->StepInstruction();
+      PrintStopReason(*process, reason);
     } else if (IsPrefix(command, "help")) {
       PrintHelp(args);
     } else {

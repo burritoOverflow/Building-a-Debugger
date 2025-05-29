@@ -33,7 +33,7 @@ namespace sdb {
   };
 
   // information for every register in the system
-  inline constexpr const RegisterInfo gRegisterInfos[] = {
+  inline constexpr RegisterInfo gRegisterInfos[] = {
 #define DEFINE_REGISTER(name, dwarf_id, size, offset, type, format) \
   {RegisterID::name, #name, dwarf_id, size, offset, type, format}
 #include <libsdb/detail/registers.inc>

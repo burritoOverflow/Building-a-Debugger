@@ -2,6 +2,7 @@
 #define SDB_TYPES_HPP
 
 #include <array>
+#include <cstdint>
 
 namespace sdb {
   using byte64  = std::array<std::byte, 8>;
