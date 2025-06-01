@@ -421,3 +421,37 @@ TEST_CASE("Can remove breakpoint sites", "[breakpoint]") {
   proc->GetBreakpointSites().RemoveByAddress(sdb::VirtualAddress{43});
   REQUIRE(proc->GetBreakpointSites().IsEmpty());
 }
+
+TEST_CASE("Reading and writing memory works", "[memory]") {
+  constexpr bool close_on_exec = false;
+  sdb::Pipe      channel(close_on_exec);
+  const auto     proc =
+      sdb::Process::Launch("targets/memory", true, channel.GetWriteFd());
+  channel.CloseWriteFd();
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  // our test program writes the pointer's address to the channel
+  // we read this value, get the memory at that address, and verify that it is
+  // as expected '0xcafecafe'
+  const auto a_pointer = sdb::FromBytes<std::uint64_t>(channel.Read().data());
+  const auto data_vec  = proc->ReadMemory(sdb::VirtualAddress{a_pointer}, 8);
+  const auto data      = sdb::FromBytes<std::uint64_t>(data_vec.data());
+
+  REQUIRE(data == 0xcafecafe);
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  // as above, but we write to the memory at the pointer's address
+  const auto b_pointer = sdb::FromBytes<std::uint64_t>(channel.Read().data());
+  proc->WriteMemory(sdb::VirtualAddress{b_pointer},
+                    {sdb::AsBytes("Hello, sdb!"), 12});
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  const auto read = channel.Read();
+  REQUIRE(sdb::ToStringView(read) == "Hello, sdb!");
+}

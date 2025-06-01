@@ -1,9 +1,12 @@
+#include <bits/types/struct_iovec.h>
 #include <csignal>
+#include <libsdb/bit.hpp>
 #include <libsdb/error.hpp>
 #include <libsdb/pipe.hpp>
 #include <libsdb/process.hpp>
 #include <sys/personality.h>
 #include <sys/ptrace.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -279,4 +282,69 @@ sdb::BreakpointSite &sdb::Process::CreateBreakpointSite(
 
   return this->breakpoint_sites_.Push(
       std::unique_ptr<BreakpointSite>(new BreakpointSite(*this, address)));
+}
+
+std::vector<std::byte> sdb::Process::ReadMemory(VirtualAddress address,
+                                                std::size_t    amount) const {
+  std::vector<std::byte> ret(amount);
+  iovec                  local_desc{ret.data(), ret.size()};
+  std::vector<iovec>     remote_descs;
+
+  while (amount > 0) {
+    // 0x1000 is the page size on x86_64 (4k), so we read up to the next page
+    // (split the range of the data to be copied on page boundaries)
+    auto       up_to_next_page = 0x1000 - (address.GetAddress() & 0xfff);
+    const auto chunk_size      = std::min(amount, up_to_next_page);
+    remote_descs.push_back(
+        {reinterpret_cast<void *>(address.GetAddress()), chunk_size});
+    amount -= chunk_size;
+    address += chunk_size;
+  }
+
+
+  if (process_vm_readv(this->pid_, &local_desc, /*liovcnt=*/1,
+                       remote_descs.data(), /*riovcnt=*/remote_descs.size(),
+                       /*flags=*/0) == -1) {
+    Error::SendErrno("Could not read process memory");
+  }
+  return ret;
+}
+
+void sdb::Process::WriteMemory(VirtualAddress             address,
+                               sdb::Span<const std::byte> data) {
+  std::size_t written = 0;
+
+  // until we've written all the data provided by the caller
+  while (written < data.Size()) {
+    auto remaining = data.Size() - written;
+
+    // data to be written on this iteration
+    std::uint64_t word;
+
+    // if at least 8 bytes remain, write the next 8 bytes from the start of
+    // the given buffer
+    if (remaining >= 8) {
+      word = FromBytes<std::uint64_t>(data.begin() + written);
+    } else {
+      // otherwise, we perform a partial memory write
+      // read the 8 bytes we'll be writing to and cast a pointer
+      auto read      = ReadMemory(address + written, 8);
+      auto word_data = reinterpret_cast<char *>(&word);
+
+      // copy the remaining data into the start of word_data
+      std::memcpy(word_data, data.begin() + written, remaining);
+
+      // followed by the bytes we're not trying to overwrite
+      std::memcpy(word_data + remaining, read.data() + remaining,
+                  8 - remaining);
+    }
+
+    // write the next 8 bytes to the inferior
+    if (ptrace(PTRACE_POKEDATA, this->pid_, address + written, word) == -1) {
+      Error::SendErrno("Failed to write memory");
+    }
+
+    // we've written 8 bytes.
+    written += 8;
+  }
 }

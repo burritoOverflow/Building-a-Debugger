@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace sdb {
   using byte64  = std::array<std::byte, 8>;
@@ -59,6 +60,32 @@ public:
 
 private:
     std::uint64_t address_ = 0;
+  };
+
+  // represents a view of an existing region of memory
+  template <class T>
+  class Span {
+public:
+    Span() = default;
+
+    // start and size
+    Span(T *data, const std::size_t size) : data_(data), size_(size) {}
+
+    // start and end ptrs
+    Span(T *data, T *end) : data_(data), size_(end - data) {}
+
+    template <class U>
+    explicit Span(const std::vector<U> &vec) :
+        data_(vec.data()), size_(vec.size()) {}
+
+    T          *begin() { return data_; }
+    T          *end() { return data_ + size_; }
+    std::size_t Size() const { return size_; }
+    T          &operator[](std::size_t n) { return *(data_ + n); }
+
+private:
+    T          *data_;
+    std::size_t size_ = 0;
   };
 }  // namespace sdb
 

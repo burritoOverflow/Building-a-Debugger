@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstring>
 #include <libsdb/types.hpp>
+#include <string_view>
 #include <vector>
 
 namespace sdb {

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace sdb {
   template <class I>
@@ -76,6 +77,43 @@ namespace sdb {
     }
     // check the end of the string
     if (c != text.end()) {
+      invalid();
+    }
+
+    return bytes;
+  }
+
+  /*
+   * we expect input in the form of hexadecimal values, comma-separated and
+   * surrounded in square brackets, as in 'mem write 0x555555555156 [0xff,0xff]'
+   */
+  inline auto ParseVector(const std::string_view text) {
+    auto invalid = [] { sdb::Error::Send("Invalid format"); };
+
+    std::vector<std::byte> bytes;
+    const char*            c = text.data();
+
+    if (*c++ != '[') {
+      invalid();
+    }
+
+    while (*c != ']') {
+      // parse 4 characters as a byte (e.g. '0xff')
+      auto byte = ToIntegral<std::byte>({c, 4}, 16);
+      bytes.push_back(byte.value());
+      // move past this value
+      c += 4;
+
+      // either a comma or the closing bracket, for the next byte or the end of
+      // the values, respectively
+      if (*c == ',') {
+        ++c;
+      } else if (*c != ']') {
+        invalid();
+      }
+    }
+
+    if (++c != text.end()) {
       invalid();
     }
 

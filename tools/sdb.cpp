@@ -25,8 +25,15 @@ namespace {
       std::cerr << R"(Available commands:
         breakpoint - Commands for operating on breakpoints
         continue - Resume the process
+        memory - Commands for operating on memory
         register - Commands for operating on registers
         step - Step over a single instruction
+)";
+    } else if (IsPrefix(args[1], "memory")) {
+      std::cerr << R"(Available commands:
+        read <address>
+        read <address> <number of bytes>
+        write <address> <bytes>
 )";
     } else if (IsPrefix(args[1], "breakpoint")) {
       std::cerr << R"(Available commands:
@@ -211,6 +218,78 @@ namespace {
   }
 
 
+  void HandleMemoryReadCommand(const sdb::Process             &process,
+                               const std::vector<std::string> &args) {
+    const auto address = sdb::ToIntegral<std::uint64_t>(args[2], 16);
+    if (!address) {
+      sdb::Error::Send("Invalid address format");
+    }
+
+    auto n_bytes = 32;
+    if (args.size() == 4) {
+      auto bytes_arg = sdb::ToIntegral<std::size_t>(args[3]);
+      if (!bytes_arg) {
+        sdb::Error::Send("Invalid number of bytes");
+      }
+      n_bytes = *bytes_arg;
+    }
+
+    auto data = process.ReadMemory(sdb::VirtualAddress{*address}, n_bytes);
+
+    // iterate 16 bytes at a time
+    for (std::size_t i = 0; i < data.size(); i += 16) {
+      const auto start = data.begin() + i;
+      // offset the start of the data by smaller of (1 + 16) and the total data
+      // size (ensuring that `end` doesn't point past the end of the data of the
+      // number of bytes is not divisible by 16)
+      const auto end = data.begin() + std::min(i + 16, data.size());
+
+      // show in hex with a padding of 16 chars and show each value in hex
+      // without leading '0x'
+      fmt::print("{:#016x}: {:02x}\n", *address + i,
+                 fmt::join(start, end, " "));
+    }
+  }
+
+  void HandleMemoryWriteCommand(sdb::Process                   &process,
+                                const std::vector<std::string> &args) {
+    // memory write command expects 4 arguments:
+    // i.e 'mem write 0x555555555156 [0xff,0xce]'
+    // where this last argument is a vector of bytes in hexadecimal, with no
+    // space between commas. if a user provides spaces, we'll land on this
+    // failure branch
+    if (args.size() != 4) {
+      PrintHelp({"help", "memory"});
+      return;
+    }
+
+    // parse the address, i,e '0x555555555156'
+    const auto address = sdb::ToIntegral<std::uint64_t>(args[2], 16);
+    if (!address) {
+      sdb::Error::Send("Invalid address format");
+    }
+
+    const auto data = sdb::ParseVector(args[3]);
+    process.WriteMemory(sdb::VirtualAddress{*address},
+                        {data.data(), data.size()});
+  }
+
+  void HandleMemoryCommand(sdb::Process                   &process,
+                           const std::vector<std::string> &args) {
+    if (args.size() < 3) {
+      PrintHelp({"help", "memory"});
+      return;
+    }
+
+    if (IsPrefix(args[1], "read")) {
+      HandleMemoryReadCommand(process, args);
+    } else if (IsPrefix(args[1], "write")) {
+      HandleMemoryWriteCommand(process, args);
+    } else {
+      PrintHelp({"help", "memory"});
+    }
+  }
+
   void HandleBreakpointCommand(
       std::unique_ptr<sdb::Process>::element_type &process,
       const std::vector<std::string>              &args) {
@@ -280,6 +359,8 @@ namespace {
       process->Resume();
       const auto reason = process->WaitOnSignal();
       PrintStopReason(*process, reason);
+    } else if (IsPrefix(command, "memory")) {
+      HandleMemoryCommand(*process, args);
     } else if (IsPrefix(command, "register")) {
       HandleRegisterCommand(*process, args);
     } else if (IsPrefix(command, "breakpoint")) {

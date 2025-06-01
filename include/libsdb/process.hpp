@@ -2,11 +2,13 @@
 #define SDB_PROCESS_HPP
 
 #include <filesystem>
+#include <libsdb/bit.hpp>
 #include <libsdb/breakpoint_site.hpp>
 #include <libsdb/registers.hpp>
 #include <libsdb/stoppoint_collection.hpp>
 #include <memory>
 #include <optional>
+
 
 namespace sdb {
   // current running state of the process
@@ -65,6 +67,21 @@ public:
     void SetPc(VirtualAddress address) {
       this->GetRegisters().WriteById(RegisterID::rip, address.GetAddress());
     }
+
+    // takes a virtual address to read from and the number of bytes to read
+    // and returns the data as a std::vector<std::byte>
+    std::vector<std::byte> ReadMemory(VirtualAddress address,
+                                      std::size_t    amount) const;
+
+    template <class T>
+    T ReadMemoryAs(const VirtualAddress address) const {
+      auto data = this->ReadMemory(address, sizeof(T));
+      return FromBytes<T>(data);
+    }
+
+    // takes a virtual address to write to and a Span<const std::byte>
+    // representing the data to write
+    void WriteMemory(VirtualAddress address, Span<const std::byte> data);
 
     // create a breakpoint site at the given address
     BreakpointSite &CreateBreakpointSite(VirtualAddress address);
