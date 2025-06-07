@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.25)
 
 project("sdb" LANGUAGES CXX ASM)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(libedit REQUIRED IMPORTED_TARGET libedit)
+find_package(fmt CONFIG REQUIRED)
+find_package(zydis CONFIG REQUIRED)
+
 include(CTest)
 
 add_subdirectory("src")
@@ -11,10 +16,5 @@ if (BUILD_TESTING)
     find_package(Catch2 CONFIG REQUIRED)
     add_subdirectory("test")
 endif ()
-
-# find libedit
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(libedit REQUIRED IMPORTED_TARGET libedit)
-find_package(fmt CONFIG REQUIRED)
 
 target_link_libraries(sdb PRIVATE sdb::libsdb PkgConfig::libedit fmt::fmt)

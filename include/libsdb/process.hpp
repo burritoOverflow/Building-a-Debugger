@@ -73,6 +73,11 @@ public:
     std::vector<std::byte> ReadMemory(VirtualAddress address,
                                       std::size_t    amount) const;
 
+    // read the contents of memory with all int3 instructions replaced with the
+    // original byte
+    std::vector<std::byte> ReadMemoryWithoutTraps(VirtualAddress address,
+                                                  std::size_t    amount) const;
+
     template <class T>
     T ReadMemoryAs(const VirtualAddress address) const {
       auto data = this->ReadMemory(address, sizeof(T));

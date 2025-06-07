@@ -310,7 +310,27 @@ std::vector<std::byte> sdb::Process::ReadMemory(VirtualAddress address,
   return ret;
 }
 
-void sdb::Process::WriteMemory(VirtualAddress             address,
+std::vector<std::byte> sdb::Process::ReadMemoryWithoutTraps(
+    const VirtualAddress address, const std::size_t amount) const {
+  auto memory = this->ReadMemory(address, amount);
+
+  const auto sites =
+      this->breakpoint_sites_.GetInRegion(address, address + amount);
+
+  for (const auto &site : sites) {
+    if (!site->IsEnabled()) {
+      continue;  // skip disabled breakpoints
+    }
+
+    // for each enabled site, we replace the int3 instruction at the add on
+    // which the breakpoint is set with the saved data.
+    auto offset                 = site->Address() - address.GetAddress();
+    memory[offset.GetAddress()] = site->saved_data_;  // restore the saved data
+  }
+  return memory;
+}
+
+void sdb::Process::WriteMemory(const VirtualAddress       address,
                                sdb::Span<const std::byte> data) {
   std::size_t written = 0;
 

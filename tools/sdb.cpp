@@ -2,6 +2,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <iostream>
+#include <libsdb/disassembler.hpp>
 #include <libsdb/error.hpp>
 #include <libsdb/parse.hpp>
 #include <libsdb/process.hpp>
@@ -25,6 +26,7 @@ namespace {
       std::cerr << R"(Available commands:
         breakpoint - Commands for operating on breakpoints
         continue - Resume the process
+        disassemble - Disassemble machine code to assembly
         memory - Commands for operating on memory
         register - Commands for operating on registers
         step - Step over a single instruction
@@ -49,6 +51,11 @@ namespace {
         read <register>
         read all
         write <register> <value>
+ )";
+    } else if (IsPrefix(args[1], "disassemble")) {
+      std::cerr << R"(Available options:
+        -c <number of instructions>
+        -a <start address>
  )";
     } else {
       std::cerr << "No help available for " << args[1] << '\n';
@@ -102,6 +109,24 @@ namespace {
     }
 
     fmt::print("Process {}: {}\n", process.GetPid(), message);
+  }
+
+
+  void PrintDisassembly(sdb::Process &process, sdb::VirtualAddress address,
+                        std::size_t n_instructions) {
+    const sdb::Disassembler disassembler(process);
+    auto instructions = disassembler.Disassemble(n_instructions, address);
+    for (const auto &[address, text] : instructions) {
+      // add padding for vertical alignment
+      fmt::print("{:#18x}: {}\n", address.GetAddress(), text);
+    }
+  }
+
+  void HandleStop(sdb::Process &process, const sdb::StopReason reason) {
+    PrintStopReason(process, reason);
+    if (reason.reason == sdb::ProcessState::Stopped) {
+      PrintDisassembly(process, process.GetPc(), 10);
+    }
   }
 
   sdb::Registers::value ParseRegisterValue(const sdb::RegisterInfo &info,
@@ -298,7 +323,7 @@ namespace {
       return;
     }
 
-    auto command = args[1];
+    const auto command = args[1];
 
     if (IsPrefix(command, "list")) {
       if (process.GetBreakpointSites().IsEmpty()) {
@@ -350,6 +375,36 @@ namespace {
     }
   }
 
+  void HandleDisassembleCommand(sdb::Process                   &process,
+                                const std::vector<std::string> &args) {
+    auto        address        = process.GetPc();
+    std::size_t n_instructions = 5;
+
+    auto it = args.begin() + 1;
+
+    while (it != args.end()) {
+      if (*it == "-a" && it + 1 != args.end()) {
+        ++it;
+        const auto opt_address = sdb::ToIntegral<std::uint64_t>(*it++, 16);
+        if (!opt_address) {
+          sdb::Error::Send("Invalid address format");
+          address = sdb::VirtualAddress{*opt_address};
+        }
+      } else if (*it == "-c" && it + 1 != args.end()) {
+        ++it;
+        auto opt_n = sdb::ToIntegral<std::size_t>(*it++);
+        if (!opt_n) {
+          sdb::Error::Send("Invalid instruction count");
+        }
+        n_instructions = *opt_n;
+      } else {
+        PrintHelp({"help", "disassemble"});
+        return;
+      }
+    }
+    PrintDisassembly(process, address, n_instructions);
+  }
+
   void HandleCommand(const std::unique_ptr<sdb::Process> &process,
                      const std::string_view               line) {
     const auto  args    = Split(line, ' ');
@@ -358,7 +413,7 @@ namespace {
     if (IsPrefix(command, "continue")) {
       process->Resume();
       const auto reason = process->WaitOnSignal();
-      PrintStopReason(*process, reason);
+      HandleStop(*process, reason);
     } else if (IsPrefix(command, "memory")) {
       HandleMemoryCommand(*process, args);
     } else if (IsPrefix(command, "register")) {
@@ -367,9 +422,11 @@ namespace {
       HandleBreakpointCommand(*process, args);
     } else if (IsPrefix(command, "step")) {
       const auto reason = process->StepInstruction();
-      PrintStopReason(*process, reason);
+      HandleStop(*process, reason);
     } else if (IsPrefix(command, "help")) {
       PrintHelp(args);
+    } else if (IsPrefix(command, "disassemble")) {
+      HandleDisassembleCommand(*process, args);
     } else {
       std::cerr << "Unknown command\n";
     }
@@ -403,6 +460,7 @@ namespace {
       }
     }
   }
+
 }  // namespace
 
 

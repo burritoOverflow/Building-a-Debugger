@@ -21,8 +21,10 @@ public:
     StopPoint       &GetById(typename StopPoint::id_type id);
     const StopPoint &GetById(typename StopPoint::id_type id) const;
 
-    StopPoint       &GetByAddress(VirtualAddress address);
-    const StopPoint &GetByAddress(VirtualAddress address) const;
+    StopPoint               &GetByAddress(VirtualAddress address);
+    const StopPoint         &GetByAddress(VirtualAddress address) const;
+    std::vector<StopPoint *> GetInRegion(VirtualAddress low,
+                                         VirtualAddress high) const;
 
     void RemoveById(typename StopPoint::id_type id);
     void RemoveByAddress(VirtualAddress address);
@@ -156,6 +158,20 @@ private:
     for (const auto &point : this->stoppoints_) {
       f(*point);
     }
+  }
+
+  template <class StopPoint>
+  std::vector<StopPoint *> StoppointCollection<StopPoint>::GetInRegion(
+      VirtualAddress low, VirtualAddress high) const {
+    std::vector<StopPoint *> ret;
+
+    for (const auto &site : this->stoppoints_) {
+      if (site->IsInRange(low, high)) {
+        ret.push_back(site.get());
+      }
+    }
+
+    return ret;
   }
 
 }  // namespace sdb
