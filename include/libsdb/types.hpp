@@ -9,6 +9,8 @@ namespace sdb {
   using byte64  = std::array<std::byte, 8>;
   using byte128 = std::array<std::byte, 16>;
 
+  enum class StoppointMode { write, read_write, execute };
+
   class VirtualAddress {
 public:
     VirtualAddress() = default;

@@ -64,7 +64,7 @@ public:
     }
 
     // Write the given address to the program counter (RIP)
-    void SetPc(VirtualAddress address) {
+    void SetPc(const VirtualAddress address) {
       this->GetRegisters().WriteById(RegisterID::rip, address.GetAddress());
     }
 
@@ -89,7 +89,12 @@ public:
     void WriteMemory(VirtualAddress address, Span<const std::byte> data);
 
     // create a breakpoint site at the given address
-    BreakpointSite &CreateBreakpointSite(VirtualAddress address);
+    BreakpointSite &CreateBreakpointSite(VirtualAddress address,
+                                         bool           hardware = false,
+                                         bool           internal = false);
+
+    int SetHardwareBreakpoint(BreakpointSite::id_type id,
+                              VirtualAddress          address);
 
     StoppointCollection<BreakpointSite> &GetBreakpointSites() {
       return this->breakpoint_sites_;
@@ -99,8 +104,11 @@ public:
       return this->breakpoint_sites_;
     }
 
+    void ClearHardwareStoppoint(int index);
+
 private:
-    // for static members to construct a Process object
+    // for static members to construct a
+    // Process object
     Process(const pid_t pid, const bool terminate_on_end,
             const bool is_attached) :
         pid_(pid), terminate_on_end_(terminate_on_end),
@@ -108,11 +116,16 @@ private:
 
     void ReadAllRegisters();
 
+    // used for both hardware breakpoints and watchpoints
+    int SetHardwareStoppoint(VirtualAddress address, StoppointMode mode,
+                             std::size_t size);
+
     // for the process we're tracking
     pid_t pid_ = 0;
     // should we terminate the process?
     bool terminate_on_end_ = true;
     bool is_attached_      = false;
+
     // current state of the process
     ProcessState state_ = ProcessState::Stopped;
 

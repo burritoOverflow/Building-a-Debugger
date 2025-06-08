@@ -38,7 +38,9 @@ private:
     friend Process;  // Process should be able to construct a Registers object
     explicit Registers(Process &proc) : proc_(&proc) {}
 
-    user     data_;
+    user data_;      // this struct is populated when reading all registers (via
+                     // ptrace for GPR and FPR registers); debug registers are
+                     // populated manually
     Process *proc_;  // pointer to our parent process to allow it to read mem
                      // for us
   };

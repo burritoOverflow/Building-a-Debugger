@@ -455,3 +455,44 @@ TEST_CASE("Reading and writing memory works", "[memory]") {
   const auto read = channel.Read();
   REQUIRE(sdb::ToStringView(read) == "Hello, sdb!");
 }
+
+TEST_CASE("Hardware breakpoint evades memory checksums", "[breakpoint]") {
+  constexpr bool close_on_exec = false;
+  sdb::Pipe      channel(close_on_exec);
+  const auto     proc =
+      sdb::Process::Launch("targets/anti_debugger", true, channel.GetWriteFd());
+  channel.CloseWriteFd();
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  const auto func =
+      sdb::VirtualAddress(sdb::FromBytes<std::uint64_t>(channel.Read().data()));
+
+  auto &soft = proc->CreateBreakpointSite(func, false);
+  soft.Enable();
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  REQUIRE(sdb::ToStringView(channel.Read()) ==
+          "Putting pepperoni on pizza...\n");
+
+  // remove the software breakpoint
+  proc->GetBreakpointSites().RemoveById(soft.GetId());
+
+  auto &hard = proc->CreateBreakpointSite(func, true);
+  hard.Enable();
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  REQUIRE(proc->GetPc() == func);
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  // verify that the 'innocent' function is now being called
+  REQUIRE(sdb::ToStringView(channel.Read()) ==
+          "Putting pineapple on pizza...\n");
+}

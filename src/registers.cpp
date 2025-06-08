@@ -18,8 +18,8 @@ namespace {
         return sdb::ToByte128(static_cast<long double>(t));
       }
     } else if constexpr (std::is_signed_v<T>) {
-      // if signed integer, we sign-extend it to the size of the register, before
-      // casting to byte128
+      // if signed integer, we sign-extend it to the size of the register,
+      // before casting to byte128
       if (info.format == sdb::RegisterFormat::UINT) {
         switch (info.size) {
           case 2:
@@ -68,7 +68,7 @@ sdb::Registers::value sdb::Registers::Read(const RegisterInfo& info) const {
 }
 
 void sdb::Registers::Write(const RegisterInfo& info, value value) {
-  const auto bytes = AsBytes(data_);
+  auto bytes = AsBytes(data_);
 
   std::visit(
       [&](auto& v)

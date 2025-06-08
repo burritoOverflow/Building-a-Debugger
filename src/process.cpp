@@ -247,6 +247,7 @@ void sdb::Process::ReadAllRegisters() {
              &this->GetRegisters().data_.regs) == -1) {
     Error::SendErrno("Could not read GPR registers");
   }
+
   // get FPR registers
   if (ptrace(PTRACE_GETFPREGS, this->pid_, nullptr,
              &this->GetRegisters().data_.i387) == -1) {
@@ -274,14 +275,20 @@ void sdb::Process::ReadAllRegisters() {
 }
 
 sdb::BreakpointSite &sdb::Process::CreateBreakpointSite(
-    const VirtualAddress address) {
+    const VirtualAddress address, const bool hardware, const bool internal) {
   if (this->breakpoint_sites_.ContainsAddress(address)) {
-    Error::Send("Breakpoint site already created at this address" +
+    Error::Send("Breakpoint site already created at this address " +
                 std::to_string(address.GetAddress()));
   }
 
-  return this->breakpoint_sites_.Push(
-      std::unique_ptr<BreakpointSite>(new BreakpointSite(*this, address)));
+  return this->breakpoint_sites_.Push(std::unique_ptr<BreakpointSite>(
+      new BreakpointSite(*this, address, hardware, internal)));
+}
+
+int sdb::Process::SetHardwareBreakpoint(BreakpointSite::id_type id,
+                                        const VirtualAddress    address) {
+  // the size for execution-only hardware breakpoints is 1
+  return this->SetHardwareStoppoint(address, StoppointMode::execute, 1);
 }
 
 std::vector<std::byte> sdb::Process::ReadMemory(VirtualAddress address,
@@ -318,7 +325,8 @@ std::vector<std::byte> sdb::Process::ReadMemoryWithoutTraps(
       this->breakpoint_sites_.GetInRegion(address, address + amount);
 
   for (const auto &site : sites) {
-    if (!site->IsEnabled()) {
+    // ignore hardware breakpoints and disabled sites
+    if (!site->IsEnabled() || site->IsHardware()) {
       continue;  // skip disabled breakpoints
     }
 
@@ -367,4 +375,96 @@ void sdb::Process::WriteMemory(const VirtualAddress       address,
     // we've written 8 bytes.
     written += 8;
   }
+}
+
+namespace {
+  std::uint64_t EncodeHardwareStoppointMode(const sdb::StoppointMode mode) {
+    switch (mode) {
+      case sdb::StoppointMode::write:
+        return 0b01;  // write
+      case sdb::StoppointMode::read_write:
+        return 0b11;  // data read/write
+      case sdb::StoppointMode::execute:
+        return 0b00;  // instruction execution
+      default:
+        sdb::Error::Send("Invalid stoppoint mode");
+    }
+  }
+
+  std::uint64_t EncodeHardwareStoppointSize(const std::size_t size) {
+    switch (size) {
+      case 1:
+        return 0b00;
+      case 2:
+        return 0b01;
+      case 4:
+        return 0b11;
+      case 8:
+        return 0b10;
+      default:
+        sdb::Error::Send("Invalid stoppoint size");
+    }
+  }
+
+  int FindFreeStoppointRegister(std::uint64_t control_register) {
+    for (auto i = 0; i < 4; ++i) {
+      // check the two enable bits in the control register that correspond to
+      // each DR register until we find one that's not enabled
+      if ((control_register & (0b11 << (i * 2))) == 0) {
+        return i;
+      }
+    }
+    sdb::Error::Send("No remaining hardware debug registers");
+  }
+
+}  // namespace
+
+int sdb::Process::SetHardwareStoppoint(const VirtualAddress address,
+                                       const StoppointMode  mode,
+                                       const std::size_t    size) {
+  auto &registers = this->GetRegisters();
+  // read the debug control register
+  const auto control = registers.ReadByIdAs<std::uint64_t>(RegisterID::dr7);
+
+  // will return 0,1,2,3 depending on which register is free, or throw an
+  // exception if there is no free space (so 'free_space' is effectively the
+  // register number)
+  const int free_space = FindFreeStoppointRegister(control);
+
+  auto id = static_cast<int>(RegisterID::dr0) + free_space;
+  // write the given address to the dr register corresponding to the free space
+  registers.WriteById(static_cast<RegisterID>(id), address.GetAddress());
+
+  const auto mode_flag = EncodeHardwareStoppointMode(mode);
+  const auto size_flag = EncodeHardwareStoppointSize(size);
+
+  const auto enable_bit = (1 << (free_space * 2));
+  const auto mode_bits  = (mode_flag << (free_space * 4 + 16));
+  const auto size_bits  = (size_flag << (free_space * 4 + 18));
+
+  const auto clear_mask =
+      (0b11 << (free_space * 2)) | (0b1111 << (free_space * 4 + 16));
+
+  auto masked = control & ~clear_mask;
+
+  masked |= enable_bit | mode_bits | size_bits;
+
+  // write to the control register
+  registers.WriteById(RegisterID::dr7, masked);
+
+  return free_space;
+}
+
+void sdb::Process::ClearHardwareStoppoint(const int index) {
+  const auto id = static_cast<int>(RegisterID::dr0) + index;
+  this->GetRegisters().WriteById(static_cast<RegisterID>(id), 0);
+
+  const auto control =
+      this->GetRegisters().ReadByIdAs<std::uint64_t>(RegisterID::dr7);
+
+  const auto clear_mask = (0b11 << (index * 2)) | (0b1111 << (index + 16));
+  auto       masked     = control & ~clear_mask;
+
+  this->GetRegisters().WriteById(
+      RegisterID::dr7, masked);  // write the modified control register
 }

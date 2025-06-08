@@ -1,6 +1,6 @@
 #ifndef DEFINE_REGISTER
 #error \
-    "This file is intended for textual inclusion with the\
+    "This file is intended for textual inclusion with the \
 DEFINE_REGISTER macro defined"
 #endif
 
@@ -152,12 +152,22 @@ DEFINE_FP_XMM(8), DEFINE_FP_XMM(9), DEFINE_FP_XMM(10), DEFINE_FP_XMM(11),
 DEFINE_FP_XMM(12), DEFINE_FP_XMM(13), DEFINE_FP_XMM(14), DEFINE_FP_XMM(15),
 // clang-format on
 
-// debug registers
-
+/*
+  Debug registers:
+  DR0 Breakpoint address #0
+  DR1 Breakpoint address #1
+  DR2 Breakpoint address #2
+  DR3 Breakpoint address #3
+  DR4 Obsolete alias for DR6
+  DR5 Obsolete alias for DR7
+  DR6 Debug status register
+  DR7 Debug control register
+  DR8–15 Reserved for processor use
+*/
 #define DR_OFFSET(number) (offsetof(user, u_debugreg) + number * 8)
 #define DEFINE_DR(number)                                                      \
   DEFINE_REGISTER(dr##number, -1, 8, DR_OFFSET(number), sdb::RegisterType::DR, \
                   sdb::RegisterFormat::UINT)
 
-    DEFINE_DR(0), DEFINE_DR(1), DEFINE_DR(2), DEFINE_DR(3), DEFINE_DR(4),
-    DEFINE_DR(5), DEFINE_DR(6), DEFINE_DR(7)
+DEFINE_DR(0), DEFINE_DR(1), DEFINE_DR(2), DEFINE_DR(3), DEFINE_DR(4),
+DEFINE_DR(5), DEFINE_DR(6), DEFINE_DR(7)

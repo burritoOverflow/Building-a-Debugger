@@ -44,6 +44,7 @@ namespace {
         disable <id>
         enable <id>
         set <address>
+        set <address> -h
 )";
     } else if (IsPrefix(args[1], "register")) {
       std::cerr << R"(Available commands:
@@ -218,8 +219,8 @@ namespace {
     }
 
     try {
-      auto info  = sdb::RegisterInfoByName(args[2]);
-      auto value = ParseRegisterValue(info, args[3]);
+      const auto info  = sdb::RegisterInfoByName(args[2]);
+      const auto value = ParseRegisterValue(info, args[3]);
       process.GetRegisters().Write(info, value);
     } catch (...) {
     }
@@ -333,6 +334,10 @@ namespace {
         process.GetBreakpointSites().ForEach(
             [](const auto &site)
             {
+              // skip internal breakpoints
+              if (site.IsInternal()) {
+                return;
+              }
               fmt::print("{}: address - {:#x}, {}\n", site.GetId(),
                          site.Address().GetAddress(),
                          site.IsEnabled() ? "enabled" : "disabled");
@@ -346,7 +351,7 @@ namespace {
     }
 
     if (IsPrefix(command, "set")) {
-      auto address = sdb::ToIntegral<std::uint64_t>(args[2], 16);
+      const auto address = sdb::ToIntegral<std::uint64_t>(args[2], 16);
 
       if (!address) {
         fmt::print(stderr,
@@ -355,7 +360,18 @@ namespace {
         return;
       }
 
-      process.CreateBreakpointSite(sdb::VirtualAddress{*address}).Enable();
+      bool hardware = false;
+      if (args.size() == 4) {
+        // hardware flag -- set hardware breakpoint if the user specified it.
+        if (args[3] == "-h") {
+          hardware = true;
+        } else {
+          sdb::Error::Send("Invalid breakpoint command argument");
+        }
+      }
+
+      process.CreateBreakpointSite(sdb::VirtualAddress{*address}, hardware)
+          .Enable();
       return;
     }
 
@@ -368,7 +384,7 @@ namespace {
     // Handle remaining cases for enabling, disabling and deleting
     if (IsPrefix(command, "enable")) {
       process.GetBreakpointSites().GetById(*id).Enable();
-    } else if (IsPrefix(command, "diable")) {
+    } else if (IsPrefix(command, "disable")) {
       process.GetBreakpointSites().GetById(*id).Disable();
     } else if (IsPrefix(command, "delete")) {
       process.GetBreakpointSites().RemoveById(*id);
