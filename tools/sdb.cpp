@@ -333,7 +333,7 @@ namespace {
       return;
     }
 
-    const auto command = args[1];
+    const auto &command = args[1];
 
     if (IsPrefix(command, "list")) {
       if (process.GetBreakpointSites().IsEmpty()) {
@@ -548,6 +548,8 @@ namespace {
       HandleRegisterCommand(*process, args);
     } else if (IsPrefix(command, "breakpoint")) {
       HandleBreakpointCommand(*process, args);
+    } else if (IsPrefix(command, "watchpoint")) {
+      HandleWatchpointCommand(*process, args);
     } else if (IsPrefix(command, "step")) {
       const auto reason = process->StepInstruction();
       HandleStop(*process, reason);
