@@ -466,9 +466,11 @@ TEST_CASE("Hardware breakpoint evades memory checksums", "[breakpoint]") {
   proc->Resume();
   proc->WaitOnSignal();
 
+  // get the address (sent via stdout) of the 'innocent' function
   const auto func =
       sdb::VirtualAddress(sdb::FromBytes<std::uint64_t>(channel.Read().data()));
 
+  // and set a software breakpoint at the function's address
   auto &soft = proc->CreateBreakpointSite(func, false);
   soft.Enable();
 
@@ -481,6 +483,7 @@ TEST_CASE("Hardware breakpoint evades memory checksums", "[breakpoint]") {
   // remove the software breakpoint
   proc->GetBreakpointSites().RemoveById(soft.GetId());
 
+  // and now set a hardware breakpoint at the same address
   auto &hard = proc->CreateBreakpointSite(func, true);
   hard.Enable();
 
@@ -492,7 +495,43 @@ TEST_CASE("Hardware breakpoint evades memory checksums", "[breakpoint]") {
   proc->Resume();
   proc->WaitOnSignal();
 
-  // verify that the 'innocent' function is now being called
+  // and last, verify that the 'innocent' function is being called
+  REQUIRE(sdb::ToStringView(channel.Read()) ==
+          "Putting pineapple on pizza...\n");
+}
+
+TEST_CASE("Watchpoint detects read", "[watchpoint]") {
+  constexpr bool close_on_exec = false;
+  sdb::Pipe      channel(close_on_exec);
+  const auto     proc =
+      sdb::Process::Launch("targets/anti_debugger", true, channel.GetWriteFd());
+  channel.CloseWriteFd();
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  const auto func =
+      sdb::VirtualAddress(sdb::FromBytes<std::uint64_t>(channel.Read().data()));
+
+  auto &watch = proc->CreateWatchpoint(func, sdb::StoppointMode::read_write, 1);
+  watch.Enable();
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  proc->StepInstruction();
+  auto &soft = proc->CreateBreakpointSite(func, false);
+  soft.Enable();
+
+  proc->Resume();
+  const auto reason = proc->WaitOnSignal();
+
+  REQUIRE(reason.info == SIGTRAP);
+
+  proc->Resume();
+  proc->WaitOnSignal();
+
+  // as above.
   REQUIRE(sdb::ToStringView(channel.Read()) ==
           "Putting pineapple on pizza...\n");
 }

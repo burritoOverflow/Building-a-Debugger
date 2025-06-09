@@ -14,7 +14,12 @@ public:
 
     using id_type = std::int32_t;
 
+    // uses a hardware breakpoint?
     bool IsHardware() const { return this->is_hardware_; }
+
+    // is this for internal usage? (e.g the debugger will use breakpoints itself
+    // to implement functionality like source-level debugging and shared lib
+    // tracing)
     bool IsInternal() const { return this->is_internal_; }
 
     // Breakpoint should have unique IDs, ref'd either from code or

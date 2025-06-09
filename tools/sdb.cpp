@@ -30,6 +30,7 @@ namespace {
         memory - Commands for operating on memory
         register - Commands for operating on registers
         step - Step over a single instruction
+        watchpoint - Commands for operating on watchpoints
 )";
     } else if (IsPrefix(args[1], "memory")) {
       std::cerr << R"(Available commands:
@@ -58,6 +59,14 @@ namespace {
         -c <number of instructions>
         -a <start address>
  )";
+    } else if (IsPrefix(args[1], "watchpoint")) {
+      std::cerr << R"(Available commands:
+        list
+        delete <id>
+        disable <id>
+        enable <id>
+        set <address> <write|rw|execute> <size>
+)";
     } else {
       std::cerr << "No help available for " << args[1] << '\n';
     }
@@ -391,6 +400,107 @@ namespace {
     }
   }
 
+  void HandleWatchpointList(sdb::Process                   &process,
+                            const std::vector<std::string> &args) {
+    const auto StoppointModeToStr = [](const sdb::StoppointMode mode)
+    {
+      switch (mode) {
+        case sdb::StoppointMode::execute:
+          return "execute";
+        case sdb::StoppointMode::write:
+          return "write";
+        case sdb::StoppointMode::read_write:
+          return "read_write";
+        default:
+          sdb::Error::Send("Invalid stoppoint mode");
+      }
+    };
+
+    if (process.GetWatchpoints().IsEmpty()) {
+      fmt::print("No watchpoints set\n");
+    } else {
+      fmt::print("Current watchpoints:\n");
+      process.GetWatchpoints().ForEach(
+          [&](const auto &watchpoint)
+          {
+            fmt::print("{}: address = {:#x}, mode = {}, size = {}, {}\n",
+                       watchpoint.GetId(), watchpoint.GetAddress().GetAddress(),
+                       StoppointModeToStr(watchpoint.GetMode()),
+                       watchpoint.GetSize(),
+                       watchpoint.IsEnabled() ? "enabled" : "disabled");
+          });
+    }
+  }
+
+  void HandleWatchpointSet(sdb::Process                   &process,
+                           const std::vector<std::string> &args) {
+    if (args.size() != 5) {
+      PrintHelp({"help", "watchpoint"});
+      return;
+    }
+
+    const auto  address   = sdb::ToIntegral<std::uint64_t>(args[2], 16);
+    const auto &mode_text = args[3];
+    const auto  size      = sdb::ToIntegral<std::size_t>(args[4]);
+
+    if (!address || !size ||
+        !(mode_text == "execute" || mode_text == "write" ||
+          mode_text == "rw")) {
+      PrintHelp({"help", "watchpoint"});
+      return;
+    }
+
+    sdb::StoppointMode mode;
+    // we've validated that it's one of these three above, so safe to
+    // use after this point
+    if (mode_text == "execute") {
+      mode = sdb::StoppointMode::execute;
+    } else if (mode_text == "write") {
+      mode = sdb::StoppointMode::write;
+    } else if (mode_text == "rw") {
+      mode = sdb::StoppointMode::read_write;
+    }
+
+    process.CreateWatchpoint(sdb::VirtualAddress{*address}, mode, *size)
+        .Enable();
+  }
+
+  void HandleWatchpointCommand(
+      std::unique_ptr<sdb::Process>::element_type &process,
+      const std::vector<std::string>              &args) {
+    if (args.size() < 3) {
+      PrintHelp({"help", "watchpoint"});
+      return;
+    }
+
+    const auto &command = args[1];
+
+    if (IsPrefix(command, "list")) {
+      HandleWatchpointList(process, args);
+    }
+
+    if (IsPrefix(command, "set")) {
+      HandleWatchpointSet(process, args);
+    }
+
+    if (args.size() < 3) {
+      PrintHelp({"help", "watchpoint"});
+    }
+
+    const auto id = sdb::ToIntegral<sdb::Watchpoint::id_type>(args[2]);
+    if (!id) {
+      std::cerr << "Watchpoint command expects watchpoint ID\n";
+    }
+
+    if (IsPrefix(command, "enable")) {
+      process.GetWatchpoints().GetById(*id).Enable();
+    } else if (IsPrefix(command, "disable")) {
+      process.GetWatchpoints().GetById(*id).Disable();
+    } else if (IsPrefix(command, "delete")) {
+      process.GetWatchpoints().RemoveById(*id);
+    }
+  }
+
   void HandleDisassembleCommand(sdb::Process                   &process,
                                 const std::vector<std::string> &args) {
     auto        address        = process.GetPc();
@@ -401,11 +511,13 @@ namespace {
     while (it != args.end()) {
       if (*it == "-a" && it + 1 != args.end()) {
         ++it;
+
         const auto opt_address = sdb::ToIntegral<std::uint64_t>(*it++, 16);
         if (!opt_address) {
           sdb::Error::Send("Invalid address format");
-          address = sdb::VirtualAddress{*opt_address};
         }
+
+        address = sdb::VirtualAddress{*opt_address};
       } else if (*it == "-c" && it + 1 != args.end()) {
         ++it;
         auto opt_n = sdb::ToIntegral<std::size_t>(*it++);

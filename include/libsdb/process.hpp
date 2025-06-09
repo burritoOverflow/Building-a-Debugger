@@ -6,6 +6,7 @@
 #include <libsdb/breakpoint_site.hpp>
 #include <libsdb/registers.hpp>
 #include <libsdb/stoppoint_collection.hpp>
+#include <libsdb/watchpoint.hpp>
 #include <memory>
 #include <optional>
 
@@ -93,6 +94,20 @@ public:
                                          bool           hardware = false,
                                          bool           internal = false);
 
+    Watchpoint &CreateWatchpoint(VirtualAddress address, StoppointMode mode,
+                                 std::size_t size);
+
+    StoppointCollection<Watchpoint> &GetWatchpoints() {
+      return this->watchpoints_;
+    }
+
+    const StoppointCollection<Watchpoint> &GetWatchpoints() const {
+      return this->watchpoints_;
+    }
+
+    int SetWatchpoint(Watchpoint::id_type id, VirtualAddress address,
+                      StoppointMode mode, std::size_t size);
+
     int SetHardwareBreakpoint(BreakpointSite::id_type id,
                               VirtualAddress          address);
 
@@ -127,11 +142,10 @@ private:
     bool is_attached_      = false;
 
     // current state of the process
-    ProcessState state_ = ProcessState::Stopped;
-
-    std::unique_ptr<Registers> registers_;
-
+    ProcessState                        state_ = ProcessState::Stopped;
+    std::unique_ptr<Registers>          registers_;
     StoppointCollection<BreakpointSite> breakpoint_sites_;
+    StoppointCollection<Watchpoint>     watchpoints_;
   };
 }  // namespace sdb
 

@@ -226,13 +226,14 @@ sdb::StopReason sdb::Process::WaitOnSignal() {
 
   if (this->is_attached_ and this->state() == ProcessState::Stopped) {
     // if we're attached to the process, and it's stopped, we
-    // read the registers
+    // read the registers setting the internal state of the `data_` member to
+    // reflect the contents of the registers
     this->ReadAllRegisters();
 
     // if the process stopped due to SIGTRAP and the addr 1 byte below the PC
     // is an enabled breakpoint, we fix up the PC to point to the breakpoint
-    const auto instruction_begin = this->GetPc() - 1;
-    if (stop_reason.info == SIGTRAP and
+    if (const auto instruction_begin = this->GetPc() - 1;
+        stop_reason.info == SIGTRAP and
         this->breakpoint_sites_.EnabledStopPointAtAddress(instruction_begin)) {
       this->SetPc(instruction_begin);
     }
@@ -283,6 +284,25 @@ sdb::BreakpointSite &sdb::Process::CreateBreakpointSite(
 
   return this->breakpoint_sites_.Push(std::unique_ptr<BreakpointSite>(
       new BreakpointSite(*this, address, hardware, internal)));
+}
+
+sdb::Watchpoint &sdb::Process::CreateWatchpoint(VirtualAddress address,
+                                                StoppointMode  mode,
+                                                std::size_t    size) {
+  if (this->watchpoints_.ContainsAddress(address)) {
+    Error::Send("Watchpoint already created at address " +
+                std::to_string(address.GetAddress()));
+  }
+
+  return this->watchpoints_.Push(
+      std::unique_ptr<Watchpoint>(new Watchpoint(*this, address, mode, size)));
+}
+
+int sdb::Process::SetWatchpoint([[maybe_unused]] Watchpoint::id_type id,
+                                const VirtualAddress                 address,
+                                const StoppointMode                  mode,
+                                const std::size_t                    size) {
+  return this->SetHardwareStoppoint(address, mode, size);
 }
 
 int sdb::Process::SetHardwareBreakpoint(BreakpointSite::id_type id,

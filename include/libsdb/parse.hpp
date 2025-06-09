@@ -17,9 +17,9 @@ namespace sdb {
       begin += 2;
     }
 
-    I    ret;
-    auto result = std::from_chars(begin, sv.end(), ret, base);
-    if (result.ptr != sv.end()) {
+    I ret;
+    if (auto result = std::from_chars(begin, sv.end(), ret, base);
+        result.ptr != sv.end()) {
       // return empty if some input remains
       return std::nullopt;
     }
