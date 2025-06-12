@@ -87,7 +87,7 @@ public:
 
     // takes a virtual address to write to and a Span<const std::byte>
     // representing the data to write
-    void WriteMemory(VirtualAddress address, Span<const std::byte> data);
+    void WriteMemory(VirtualAddress address, Span<const std::byte> data) const;
 
     // create a breakpoint site at the given address
     BreakpointSite &CreateBreakpointSite(VirtualAddress address,

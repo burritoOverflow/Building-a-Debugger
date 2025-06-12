@@ -189,7 +189,7 @@ namespace {
         return fmt::format("{:#0{}x}", t, sizeof(t) * 2 + 2);
       } else {
         // join arrays using a comma and format the internal bytes as
-        // as hexadecimal with a leading '0x padded to four characters
+        // as hexadecimal with a leading '0x' padded to four characters
         return fmt::format("[{:#04x}]", fmt::join(t, ","));
       }
     };
@@ -274,6 +274,7 @@ namespace {
     // iterate 16 bytes at a time
     for (std::size_t i = 0; i < data.size(); i += 16) {
       const auto start = data.begin() + i;
+
       // offset the start of the data by smaller of (1 + 16) and the total data
       // size (ensuring that `end` doesn't point past the end of the data of the
       // number of bytes is not divisible by 16)

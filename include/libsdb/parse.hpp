@@ -26,9 +26,10 @@ namespace sdb {
     return ret;
   }
 
-  // called only when std::byte is is specified as the template argument
+  // called only when std::byte is specified as the template argument
   template <>
-  inline std::optional<std::byte> ToIntegral(std::string_view sv, int base) {
+  inline std::optional<std::byte> ToIntegral(const std::string_view sv,
+                                             const int              base) {
     const auto uint8t = ToIntegral<std::uint8_t>(sv, base);
     if (!uint8t) {
       return std::nullopt;

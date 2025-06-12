@@ -82,7 +82,6 @@ sdb::Process::~Process() {
   }
 }
 
-
 std::unique_ptr<sdb::Process> sdb::Process::Launch(
     const std::filesystem::path &program_path, const bool debug,
     std::optional<int> stdout_replacement) {
@@ -358,13 +357,13 @@ std::vector<std::byte> sdb::Process::ReadMemoryWithoutTraps(
   return memory;
 }
 
-void sdb::Process::WriteMemory(const VirtualAddress       address,
-                               sdb::Span<const std::byte> data) {
+void sdb::Process::WriteMemory(const VirtualAddress  address,
+                               Span<const std::byte> data) const {
   std::size_t written = 0;
 
   // until we've written all the data provided by the caller
   while (written < data.Size()) {
-    auto remaining = data.Size() - written;
+    const auto remaining = data.Size() - written;
 
     // data to be written on this iteration
     std::uint64_t word;
@@ -376,8 +375,8 @@ void sdb::Process::WriteMemory(const VirtualAddress       address,
     } else {
       // otherwise, we perform a partial memory write
       // read the 8 bytes we'll be writing to and cast a pointer
-      auto read      = ReadMemory(address + written, 8);
-      auto word_data = reinterpret_cast<char *>(&word);
+      auto       read      = ReadMemory(address + written, 8);
+      const auto word_data = reinterpret_cast<char *>(&word);
 
       // copy the remaining data into the start of word_data
       std::memcpy(word_data, data.begin() + written, remaining);
