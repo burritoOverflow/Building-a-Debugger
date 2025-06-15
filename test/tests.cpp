@@ -7,6 +7,7 @@
 #include <libsdb/error.hpp>
 #include <libsdb/pipe.hpp>
 #include <libsdb/process.hpp>
+#include <libsdb/syscalls.hpp>
 #include <libsdb/types.hpp>
 #include <regex>
 
@@ -534,4 +535,14 @@ TEST_CASE("Watchpoint detects read", "[watchpoint]") {
   // as above.
   REQUIRE(sdb::ToStringView(channel.Read()) ==
           "Putting pineapple on pizza...\n");
+}
+
+// Verify that the syscall mapping functions for both conversions
+TEST_CASE("Syscall mapping works", "[syscall]") {
+  REQUIRE(sdb::SyscallIdToName(0) == "read");
+  REQUIRE(sdb::SyscallNameToId("read") == 0);
+  REQUIRE(sdb::SyscallIdToName(326) == "copy_file_range");
+  REQUIRE(sdb::SyscallNameToId("copy_file_range") == 326);
+  REQUIRE(sdb::SyscallIdToName(62) == "kill");
+  REQUIRE(sdb::SyscallNameToId("kill") == 62);
 }

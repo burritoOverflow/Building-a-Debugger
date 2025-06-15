@@ -18,6 +18,10 @@ public:
     void Enable();
     void Disable();
 
+    std::uint64_t Data() const { return this->data_; }
+
+    std::uint64_t PreviousData() const { return this->previous_data_; }
+
     bool           IsEnabled() const { return this->is_enabled_; }
     VirtualAddress GetAddress() const { return this->address_; }
     StoppointMode  GetMode() const { return this->mode_; }
@@ -33,11 +37,17 @@ public:
       return low <= this->address_ && high > this->address_;
     }
 
+    void UpdateData();
+
 private:
     friend Process;
 
     Watchpoint(Process &process, VirtualAddress address, StoppointMode mode,
                std::size_t size);
+
+    std::uint64_t data_ = 0;  // current value at the watched address
+    std::uint64_t previous_data_ =
+        0;  // previously read value at the watched address
 
     id_type        id_;
     Process       *process_;

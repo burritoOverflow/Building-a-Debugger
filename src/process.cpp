@@ -17,6 +17,12 @@ namespace {
                   message.size());
     exit(-1);
   }
+
+  void SetPtraceOptions(pid_t pid) {
+    if (ptrace(PTRACE_SETOPTIONS, pid, nullptr, PTRACE_O_TRACESYSGOOD) == -1) {
+      sdb::Error::SendErrno("Failed to set TRACESYSGOOD option");
+    }
+  }
 }  // namespace
 
 
@@ -84,7 +90,7 @@ sdb::Process::~Process() {
 
 std::unique_ptr<sdb::Process> sdb::Process::Launch(
     const std::filesystem::path &program_path, const bool debug,
-    std::optional<int> stdout_replacement) {
+    const std::optional<int> stdout_replacement) {
   // we want the pipe to be closed when we call execlp, so we
   // don't leave stale file descriptors
   Pipe channel(/*close_on_exec=*/true);
@@ -95,6 +101,16 @@ std::unique_ptr<sdb::Process> sdb::Process::Launch(
 
   // if we're in the child process, execute debugee
   if (pid == 0) {
+    /* change the inferior's process group
+     * If pid is specified as 0, the calling process’s process group ID is
+     * changed. If pgid is specified as 0, then the process group ID of the
+     * process specified by pid is made the same as its process ID.
+     * (PGID to the same value as the PID)
+     */
+    if (setpgid(0, 0) == -1) {
+      ExitWithPerror(channel, "Could not set pgid");
+    }
+
     // disable address space randomization for the newly launched child process
     personality(ADDR_NO_RANDOMIZE);
     channel.CloseReadFd();  // we're not using the read end of the pipe
@@ -139,6 +155,7 @@ std::unique_ptr<sdb::Process> sdb::Process::Launch(
 
   if (debug) {
     process->WaitOnSignal();
+    SetPtraceOptions(process->pid_);
   }
   return process;
 }
@@ -155,6 +172,7 @@ std::unique_ptr<sdb::Process> sdb::Process::Attach(const pid_t pid) {
   std::unique_ptr<sdb::Process> process(
       new sdb::Process(pid, /*terminate_on_end=*/false, /*is_attached=*/true));
   process->WaitOnSignal();
+  SetPtraceOptions(process->GetPid());
   return process;
 }
 
@@ -205,12 +223,22 @@ void sdb::Process::Resume() {
     // then re-enable the breakpoint
     bp.Enable();
   }
+  // if the syscall catch policy is set to
+  // 'None', we just continue the process, otherwise,
+  // we use PTRACE_SYSCALL to catch syscalls (in that
+  // case, the inferior will trap whenever a syscall
+  // is entered or exited)
+  const auto request =
+      this->syscall_catch_policy_.GetMode() == SyscallCatchPolicy::Mode::None
+          ? PTRACE_CONT
+          : PTRACE_SYSCALL;
 
   // and continue the process
-  if (ptrace(PTRACE_CONT, this->pid_, nullptr, nullptr) == -1) {
+  if (ptrace(request, this->pid_, nullptr, nullptr) == -1) {
     // exit if we can't resume the process
     Error::SendErrno("Could not resume");
   }
+
   this->state_ = ProcessState::Running;
 }
 
@@ -220,7 +248,7 @@ sdb::StopReason sdb::Process::WaitOnSignal() {
       waitpid(this->pid_, &wait_status, options) == -1) {
     Error::SendErrno("waitpid failed");
   }
-  const StopReason stop_reason(wait_status);
+  StopReason stop_reason(wait_status);
   this->state_ = stop_reason.reason;
 
   if (this->is_attached_ and this->state() == ProcessState::Stopped) {
@@ -228,13 +256,32 @@ sdb::StopReason sdb::Process::WaitOnSignal() {
     // read the registers setting the internal state of the `data_` member to
     // reflect the contents of the registers
     this->ReadAllRegisters();
+    this->AugmentStopReason(stop_reason);
 
     // if the process stopped due to SIGTRAP and the addr 1 byte below the PC
     // is an enabled breakpoint, we fix up the PC to point to the breakpoint
-    if (const auto instruction_begin = this->GetPc() - 1;
-        stop_reason.info == SIGTRAP and
-        this->breakpoint_sites_.EnabledStopPointAtAddress(instruction_begin)) {
-      this->SetPc(instruction_begin);
+    const auto instruction_begin = this->GetPc() - 1;
+
+    if (stop_reason.info == SIGTRAP) {
+      // if a software breakpoint caused the stop, we walk the pc back 1 byte
+      // to the start of the int3 instruction
+      if (stop_reason.trap_reason == TrapType::SoftwareBreakpoint and
+          this->breakpoint_sites_.ContainsAddress(instruction_begin) and
+          this->breakpoint_sites_.GetByAddress(instruction_begin).IsEnabled()) {
+        this->SetPc(instruction_begin);
+        // if a hardware breakpoint caused the stop, and the stop point is a
+        // watchpoint, we update the watchpoint's data
+      } else if (stop_reason.trap_reason == TrapType::HardwareBreakpoint) {
+        if (const auto id = this->GetCurrentHardwareStoppoint();
+            id.index() == 1) {  // check the variant here (1 is watchpoint)
+          // now, update data when a watchppoint triggers a stop
+          this->watchpoints_.GetById(std::get<1>(id)).UpdateData();
+        }
+      } else if (stop_reason.trap_reason == TrapType::Syscall) {
+        // replace the current stop reason with the one returned by
+        // MaybeResumeFromSyscall
+        stop_reason = this->MaybeResumeFromSyscall(stop_reason);
+      }
     }
   }
 
@@ -308,6 +355,30 @@ int sdb::Process::SetHardwareBreakpoint(BreakpointSite::id_type id,
                                         const VirtualAddress    address) {
   // the size for execution-only hardware breakpoints is 1
   return this->SetHardwareStoppoint(address, StoppointMode::execute, 1);
+}
+
+std::variant<sdb::BreakpointSite::id_type, sdb::Watchpoint::id_type>
+sdb::Process::GetCurrentHardwareStoppoint() const {
+  auto      &regs   = this->GetRegisters();
+  const auto status = regs.ReadByIdAs<std::uint64_t>(RegisterID::dr6);
+  // find index of the least significant bit set in the status (count
+  // trailing zeroes)
+  const auto index = __builtin_ctzll(status);
+
+  auto id   = static_cast<int>(RegisterID::dr0) + index;
+  auto addr = VirtualAddress(
+      regs.ReadByIdAs<std::uint64_t>(static_cast<RegisterID>(id)));
+
+  using ret =
+      std::variant<sdb::BreakpointSite::id_type, sdb::Watchpoint::id_type>;
+
+  if (this->breakpoint_sites_.ContainsAddress(addr)) {
+    auto site_id = this->breakpoint_sites_.GetByAddress(addr).GetId();
+    return ret{std::in_place_index<0>, site_id};
+  } else {
+    auto watch_id = this->watchpoints_.GetByAddress(addr).GetId();
+    return ret{std::in_place_index<1>, watch_id};
+  }
 }
 
 std::vector<std::byte> sdb::Process::ReadMemory(VirtualAddress address,
@@ -472,6 +543,94 @@ int sdb::Process::SetHardwareStoppoint(const VirtualAddress address,
   registers.WriteById(RegisterID::dr7, masked);
 
   return free_space;
+}
+
+void sdb::Process::AugmentStopReason(StopReason &reason) {
+  siginfo_t siginfo;
+  if (ptrace(PTRACE_GETSIGINFO, this->pid_, nullptr, &siginfo) == -1) {
+    Error::SendErrno("Failed to get siginfo");
+  }
+
+  // check if syscall
+  if (reason.info == (SIGTRAP | 0x80)) {
+    auto       &sys_info = reason.syscall_info.emplace();
+    const auto &regs     = this->GetRegisters();
+
+    if (this->expecting_syscall_exit_) {  // syscall exit caysed the stop
+      sys_info.entry = false;
+      sys_info.id    = regs.ReadByIdAs<std::int64_t>(
+          RegisterID::orig_rax);  // location of the syscall number
+      sys_info.return_value = regs.ReadByIdAs<std::int64_t>(
+          RegisterID::rax);                   // location of the return value
+      this->expecting_syscall_exit_ = false;  // the next syscall event will be
+                                              // interpreted as an entry event
+    } else {
+      // handle entry
+      sys_info.entry = true;
+      sys_info.id =
+          regs.ReadByIdAs<std::int64_t>(RegisterID::orig_rax);  // as above
+
+      // SYSV ABI arguments to syscall are in registers: rdi, rsi, rdx, r10, r8,
+      // and r9, in that order.
+      std::array<RegisterID, 6> args_registers = {
+          RegisterID::rdi, RegisterID::rsi, RegisterID::rdx,
+          RegisterID::r10, RegisterID::r8,  RegisterID::r9};
+
+      for (auto i = 0; i < 6; ++i) {
+        // read the syscall argument from the corresponding register
+        sys_info.args[i] = regs.ReadByIdAs<std::uint64_t>(args_registers[i]);
+      }
+
+      // inverse of the above, we next expect a syscall exit
+      this->expecting_syscall_exit_ = true;
+    }
+
+    reason.info        = SIGTRAP;
+    reason.trap_reason = TrapType::Syscall;
+    return;
+  }
+
+  this->expecting_syscall_exit_ = false;
+
+  reason.trap_reason = TrapType::Unknown;
+  if (reason.info == SIGTRAP) {
+    switch (siginfo.si_code) {
+      case TRAP_TRACE:
+        reason.trap_reason = TrapType::SingleStep;
+        break;
+        /* Note: (verbatim from the book)
+         *
+         * The Linux kernel actually reports the
+         * wrong values on x64: SI_KERNEL for software breakpoints and
+         * TRAP_BRKPT for single-stepping over a syscall. Enough important tools
+         * rely on this bug’s behavior that it’s just not worth fixing anymore.
+         */
+      case SI_KERNEL:
+        reason.trap_reason = TrapType::SoftwareBreakpoint;
+        break;
+      case TRAP_HWBKPT:
+        reason.trap_reason = TrapType::HardwareBreakpoint;
+        break;
+      default:;
+    }
+  }
+}
+
+sdb::StopReason sdb::Process::MaybeResumeFromSyscall(const StopReason &reason) {
+  // we don't bother checking for Mode::None, as we don't trigger a stop in the
+  // first place
+  if (syscall_catch_policy_.GetMode() == SyscallCatchPolicy::Mode::Some) {
+    const auto &to_catch = syscall_catch_policy_.GetToCatch();
+    const auto  found =
+        std::find(begin(to_catch), end(to_catch), reason.syscall_info->id);
+
+    // not in the list, we resume the process and wait for the next signal
+    if (found == to_catch.end()) {
+      this->Resume();
+      return this->WaitOnSignal();
+    }
+  }
+  return reason;
 }
 
 void sdb::Process::ClearHardwareStoppoint(const int index) {

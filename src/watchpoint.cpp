@@ -30,6 +30,17 @@ sdb::Watchpoint::Watchpoint(Process &process, const VirtualAddress address,
   }
 
   this->id_ = GetNextId();
+  this->UpdateData();
+}
+
+void sdb::Watchpoint::UpdateData() {
+  std::uint64_t new_data = 0;
+  // read the necessary amount of data from the watched address
+  const auto read = this->process_->ReadMemory(this->address_, this->size_);
+  // store the result
+  memcpy(&new_data, read.data(), this->size_);
+  // copy the previous data
+  this->previous_data_ = std::exchange(this->data_, new_data);
 }
 
 void sdb::Watchpoint::Enable() {

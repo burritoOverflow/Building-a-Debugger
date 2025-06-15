@@ -1,3 +1,4 @@
+#include <csignal>
 #include <editline/readline.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -13,7 +14,12 @@
 
 
 namespace {
-  bool IsPrefix(const std::string_view str, std::string_view of) {
+  sdb::Process *g_sdb_process = nullptr;  // global process object
+
+  // calls `kill` with the PID of the infernal process
+  void HandleSigint(int) { kill(g_sdb_process->GetPid(), SIGSTOP); }
+
+  bool IsPrefix(const std::string_view str, const std::string_view of) {
     if (str.size() > of.size()) {
       return false;
     }
@@ -97,8 +103,48 @@ namespace {
     return proc;
   }
 
-  void PrintStopReason(const sdb::Process   &process,
-                       const sdb::StopReason stop_reason) {
+  std::string GetSigtrapInfo(const sdb::Process   &process,
+                             const sdb::StopReason stop_reason) {
+    // for software breakpoints, find the breakpoint site corresponding to the
+    // current program counter and generate a string containing the site's ID
+    if (stop_reason.trap_reason == sdb::TrapType::SoftwareBreakpoint) {
+      const auto &site =
+          process.GetBreakpointSites().GetByAddress(process.GetPc());
+      return fmt::format(" breakpoint {})", site.GetId());
+    }
+
+    if (stop_reason.trap_reason == sdb::TrapType::HardwareBreakpoint) {
+      const auto id = process.GetCurrentHardwareStoppoint();
+
+      // hardware breakpoint site
+      if (id.index() == 0) {
+        const auto &site =
+            process.GetBreakpointSites().GetById(std::get<0>(id));
+        return fmt::format(" breakpoint {})", site.GetId());
+      }
+
+      std::string message;
+      const auto &point = process.GetWatchpoints().GetById(std::get<1>(id));
+      message += fmt::format(" (watchpoint {})", point.GetId());
+
+      if (point.Data() == point.PreviousData()) {
+        message += fmt::format("\nValue: {:#x}", point.Data());
+      } else {
+        message += fmt::format("\nOld value {:#x}\nNew value {:#x}",
+                               point.PreviousData(), point.Data());
+      }
+      return message;
+    }
+
+    if (stop_reason.trap_reason == sdb::TrapType::SingleStep) {
+      return " (single step)";
+    }
+
+    // TODO: syscall handling
+  }
+
+  void PrintStopReason(const sdb::Process    &process,
+                       const sdb::StopReason &stop_reason) {
     std::string message;
 
     switch (stop_reason.reason) {
@@ -114,6 +160,9 @@ namespace {
         message = fmt::format("stopped by signal {} at {:#x}",
                               sigabbrev_np(stop_reason.info),
                               process.GetPc().GetAddress());
+        if (stop_reason.info == SIGTRAP) {
+          message += GetSigtrapInfo(process, stop_reason);
+        }
         break;
       default:;
     }
@@ -469,7 +518,7 @@ namespace {
   void HandleWatchpointCommand(
       std::unique_ptr<sdb::Process>::element_type &process,
       const std::vector<std::string>              &args) {
-    if (args.size() < 3) {
+    if (args.size() < 2) {
       PrintHelp({"help", "watchpoint"});
       return;
     }
@@ -478,14 +527,17 @@ namespace {
 
     if (IsPrefix(command, "list")) {
       HandleWatchpointList(process, args);
+      return;
     }
 
     if (IsPrefix(command, "set")) {
       HandleWatchpointSet(process, args);
+      return;
     }
 
     if (args.size() < 3) {
       PrintHelp({"help", "watchpoint"});
+      return;
     }
 
     const auto id = sdb::ToIntegral<sdb::Watchpoint::id_type>(args[2]);
@@ -594,7 +646,6 @@ namespace {
 
 }  // namespace
 
-
 int main(const int argc, char **argv) {
   if (argc == 1) {
     std::cerr << "No arguments given\n";
@@ -603,6 +654,9 @@ int main(const int argc, char **argv) {
 
   try {
     const auto process = Attach(argc, argv);
+    // install the signal handler
+    g_sdb_process = process.get();
+    signal(SIGINT, HandleSigint);
     MainLoop(process);
   } catch (const sdb::Error &err) {
     std::cerr << err.what() << '\n';
