@@ -369,8 +369,7 @@ sdb::Process::GetCurrentHardwareStoppoint() const {
   auto addr = VirtualAddress(
       regs.ReadByIdAs<std::uint64_t>(static_cast<RegisterID>(id)));
 
-  using ret =
-      std::variant<sdb::BreakpointSite::id_type, sdb::Watchpoint::id_type>;
+  using ret = std::variant<BreakpointSite::id_type, Watchpoint::id_type>;
 
   if (this->breakpoint_sites_.ContainsAddress(addr)) {
     auto site_id = this->breakpoint_sites_.GetByAddress(addr).GetId();
@@ -556,11 +555,11 @@ void sdb::Process::AugmentStopReason(StopReason &reason) {
     auto       &sys_info = reason.syscall_info.emplace();
     const auto &regs     = this->GetRegisters();
 
-    if (this->expecting_syscall_exit_) {  // syscall exit caysed the stop
+    if (this->expecting_syscall_exit_) {  // syscall exit caused the stop
       sys_info.entry = false;
-      sys_info.id    = regs.ReadByIdAs<std::int64_t>(
+      sys_info.id    = regs.ReadByIdAs<std::uint64_t>(
           RegisterID::orig_rax);  // location of the syscall number
-      sys_info.return_value = regs.ReadByIdAs<std::int64_t>(
+      sys_info.return_value = regs.ReadByIdAs<std::uint64_t>(
           RegisterID::rax);                   // location of the return value
       this->expecting_syscall_exit_ = false;  // the next syscall event will be
                                               // interpreted as an entry event
@@ -568,7 +567,7 @@ void sdb::Process::AugmentStopReason(StopReason &reason) {
       // handle entry
       sys_info.entry = true;
       sys_info.id =
-          regs.ReadByIdAs<std::int64_t>(RegisterID::orig_rax);  // as above
+          regs.ReadByIdAs<std::uint64_t>(RegisterID::orig_rax);  // as above
 
       // SYSV ABI arguments to syscall are in registers: rdi, rsi, rdx, r10, r8,
       // and r9, in that order.

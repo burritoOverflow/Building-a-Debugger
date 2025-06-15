@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <csignal>
 #include <elf.h>
+#include <fcntl.h>
 #include <fstream>
 #include <libsdb/bit.hpp>
 #include <libsdb/breakpoint_site.hpp>
@@ -545,4 +546,34 @@ TEST_CASE("Syscall mapping works", "[syscall]") {
   REQUIRE(sdb::SyscallNameToId("copy_file_range") == 326);
   REQUIRE(sdb::SyscallIdToName(62) == "kill");
   REQUIRE(sdb::SyscallNameToId("kill") == 62);
+}
+
+TEST_CASE("Syscall catchpoint work", "[syscall]") {
+  auto       dev_null = open("/dev/null", O_WRONLY);
+  const auto proc =
+      sdb::Process::Launch("targets/anti_debugger", true, dev_null);
+
+  auto write_syscall = sdb::SyscallNameToId("write");
+  auto policy        = sdb::SyscallCatchPolicy::CatchSome({write_syscall});
+  proc->SetSyscallCatchPolicy(std::move(policy));
+
+  proc->Resume();
+  auto reason = proc->WaitOnSignal();
+
+  REQUIRE(reason.reason == sdb::ProcessState::Stopped);
+  REQUIRE(reason.info == SIGTRAP);
+  REQUIRE(reason.trap_reason == sdb::TrapType::Syscall);
+  REQUIRE(reason.syscall_info->id == write_syscall);
+  REQUIRE(reason.syscall_info->entry == true);
+
+  proc->Resume();
+  reason = proc->WaitOnSignal();
+
+  REQUIRE(reason.reason == sdb::ProcessState::Stopped);
+  REQUIRE(reason.info == SIGTRAP);
+  REQUIRE(reason.trap_reason == sdb::TrapType::Syscall);
+  REQUIRE(reason.syscall_info->id == write_syscall);
+  REQUIRE(reason.syscall_info->entry == false);
+
+  close(dev_null);
 }
