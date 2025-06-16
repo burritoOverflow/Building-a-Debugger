@@ -18,7 +18,7 @@ namespace {
     exit(-1);
   }
 
-  void SetPtraceOptions(pid_t pid) {
+  void SetPtraceOptions(const pid_t pid) {
     if (ptrace(PTRACE_SETOPTIONS, pid, nullptr, PTRACE_O_TRACESYSGOOD) == -1) {
       sdb::Error::SendErrno("Failed to set TRACESYSGOOD option");
     }
@@ -150,8 +150,8 @@ std::unique_ptr<sdb::Process> sdb::Process::Launch(
     Error::Send(std::string(chars, chars + data.size()));
   }
 
-  std::unique_ptr<sdb::Process> process(
-      new sdb::Process(pid, /*terminate_on_end=*/true, debug));
+  std::unique_ptr<Process> process(
+      new Process(pid, /*terminate_on_end=*/true, debug));
 
   if (debug) {
     process->WaitOnSignal();
@@ -169,8 +169,8 @@ std::unique_ptr<sdb::Process> sdb::Process::Attach(const pid_t pid) {
     Error::SendErrno("Could not attach");
   }
 
-  std::unique_ptr<sdb::Process> process(
-      new sdb::Process(pid, /*terminate_on_end=*/false, /*is_attached=*/true));
+  std::unique_ptr<Process> process(
+      new Process(pid, /*terminate_on_end=*/false, /*is_attached=*/true));
   process->WaitOnSignal();
   SetPtraceOptions(process->GetPid());
   return process;
@@ -178,9 +178,8 @@ std::unique_ptr<sdb::Process> sdb::Process::Attach(const pid_t pid) {
 
 sdb::StopReason sdb::Process::StepInstruction() {
   std::optional<BreakpointSite *> to_reenable;
-  auto                            pc = this->GetPc();
-
-  if (this->breakpoint_sites_.EnabledStopPointAtAddress(pc)) {
+  if (auto pc = this->GetPc();
+      this->breakpoint_sites_.EnabledStopPointAtAddress(pc)) {
     auto &bp = this->breakpoint_sites_.GetByAddress(pc);
     // disable the breakpoint so we can step over it
     bp.Disable();
@@ -332,9 +331,9 @@ sdb::BreakpointSite &sdb::Process::CreateBreakpointSite(
       new BreakpointSite(*this, address, hardware, internal)));
 }
 
-sdb::Watchpoint &sdb::Process::CreateWatchpoint(VirtualAddress address,
-                                                StoppointMode  mode,
-                                                std::size_t    size) {
+sdb::Watchpoint &sdb::Process::CreateWatchpoint(const VirtualAddress address,
+                                                const StoppointMode  mode,
+                                                const std::size_t    size) {
   if (this->watchpoints_.ContainsAddress(address)) {
     Error::Send("Watchpoint already created at address " +
                 std::to_string(address.GetAddress()));
@@ -351,8 +350,8 @@ int sdb::Process::SetWatchpoint([[maybe_unused]] Watchpoint::id_type id,
   return this->SetHardwareStoppoint(address, mode, size);
 }
 
-int sdb::Process::SetHardwareBreakpoint(BreakpointSite::id_type id,
-                                        const VirtualAddress    address) {
+int sdb::Process::SetHardwareBreakpoint(
+    [[maybe_unused]] BreakpointSite::id_type id, const VirtualAddress address) {
   // the size for execution-only hardware breakpoints is 1
   return this->SetHardwareStoppoint(address, StoppointMode::execute, 1);
 }
@@ -365,8 +364,8 @@ sdb::Process::GetCurrentHardwareStoppoint() const {
   // trailing zeroes)
   const auto index = __builtin_ctzll(status);
 
-  auto id   = static_cast<int>(RegisterID::dr0) + index;
-  auto addr = VirtualAddress(
+  auto       id   = static_cast<int>(RegisterID::dr0) + index;
+  const auto addr = VirtualAddress(
       regs.ReadByIdAs<std::uint64_t>(static_cast<RegisterID>(id)));
 
   using ret = std::variant<BreakpointSite::id_type, Watchpoint::id_type>;
@@ -374,16 +373,16 @@ sdb::Process::GetCurrentHardwareStoppoint() const {
   if (this->breakpoint_sites_.ContainsAddress(addr)) {
     auto site_id = this->breakpoint_sites_.GetByAddress(addr).GetId();
     return ret{std::in_place_index<0>, site_id};
-  } else {
-    auto watch_id = this->watchpoints_.GetByAddress(addr).GetId();
-    return ret{std::in_place_index<1>, watch_id};
   }
+
+  auto watch_id = this->watchpoints_.GetByAddress(addr).GetId();
+  return ret{std::in_place_index<1>, watch_id};
 }
 
 std::vector<std::byte> sdb::Process::ReadMemory(VirtualAddress address,
                                                 std::size_t    amount) const {
   std::vector<std::byte> ret(amount);
-  iovec                  local_desc{ret.data(), ret.size()};
+  const iovec            local_desc{ret.data(), ret.size()};
   std::vector<iovec>     remote_descs;
 
   while (amount > 0) {
@@ -571,7 +570,7 @@ void sdb::Process::AugmentStopReason(StopReason &reason) {
 
       // SYSV ABI arguments to syscall are in registers: rdi, rsi, rdx, r10, r8,
       // and r9, in that order.
-      std::array<RegisterID, 6> args_registers = {
+      constexpr std::array<RegisterID, 6> args_registers = {
           RegisterID::rdi, RegisterID::rsi, RegisterID::rdx,
           RegisterID::r10, RegisterID::r8,  RegisterID::r9};
 

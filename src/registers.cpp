@@ -39,7 +39,7 @@ namespace {
 }  // namespace
 
 sdb::Registers::value sdb::Registers::Read(const RegisterInfo& info) const {
-  const auto bytes = sdb::AsBytes(data_);
+  const auto bytes = AsBytes(data_);
 
   if (info.format == RegisterFormat::UINT) {
     switch (info.size) {

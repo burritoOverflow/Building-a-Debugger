@@ -195,8 +195,8 @@ private:
     int SetHardwareStoppoint(VirtualAddress address, StoppointMode mode,
                              std::size_t size);
 
-    // called when we know the process has stopped because of a signal, rather
-    // than because of exit or termination
+    // called when we know that the process has stopped because of a signal,
+    // rather than because of exit or termination
     void AugmentStopReason(StopReason &reason);
 
     StopReason MaybeResumeFromSyscall(const StopReason &reason);

@@ -10,7 +10,7 @@ namespace {
 
 sdb::Watchpoint::Watchpoint(Process &process, const VirtualAddress address,
                             const StoppointMode mode, const std::size_t size) :
-    process_{&process}, address_{address}, is_enabled_{false}, mode_{mode},
+    process_{&process}, address_{address}, mode_{mode}, is_enabled_{false},
     size_{size} {
   // watchpoints on x64 must be aligned to their size; 8-byte watchpoints must
   // fall on 8-byte boundaries, 4-byte watchpoints on 4-byte boundaries, etc.
