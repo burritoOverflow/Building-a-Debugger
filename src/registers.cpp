@@ -1,8 +1,7 @@
 #include <iostream>
 #include <libsdb/bit.hpp>
+#include <libsdb/process.hpp>
 #include <libsdb/registers.hpp>
-
-#include "libsdb/process.hpp"
 
 namespace {
   template <class T>

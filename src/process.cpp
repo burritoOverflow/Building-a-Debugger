@@ -1,5 +1,7 @@
 #include <bits/types/struct_iovec.h>
 #include <csignal>
+#include <elf.h>
+#include <fstream>
 #include <libsdb/bit.hpp>
 #include <libsdb/error.hpp>
 #include <libsdb/pipe.hpp>
@@ -354,6 +356,24 @@ int sdb::Process::SetHardwareBreakpoint(
     [[maybe_unused]] BreakpointSite::id_type id, const VirtualAddress address) {
   // the size for execution-only hardware breakpoints is 1
   return this->SetHardwareStoppoint(address, StoppointMode::execute, 1);
+}
+
+std::unordered_map<int, std::uint64_t> sdb::Process::GetAuxiliaryVector()
+    const {
+  const auto    path = "/proc/" + std::to_string(this->pid_) + "/auxv";
+  std::ifstream auxv(path);
+
+  std::unordered_map<int, std::uint64_t> ret;
+  std::uint64_t                          id, value;
+
+  auto read = [&](auto &info)
+  { auxv.read(reinterpret_cast<char *>(&info), sizeof(info)); };
+
+  for (read(id); id != AT_NULL; read(id)) {
+    read(value);
+    ret[id] = value;
+  }
+  return ret;
 }
 
 std::variant<sdb::BreakpointSite::id_type, sdb::Watchpoint::id_type>

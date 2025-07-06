@@ -5,6 +5,7 @@
 #include <fstream>
 #include <libsdb/bit.hpp>
 #include <libsdb/breakpoint_site.hpp>
+#include <libsdb/elf.hpp>
 #include <libsdb/error.hpp>
 #include <libsdb/pipe.hpp>
 #include <libsdb/process.hpp>
@@ -84,8 +85,8 @@ namespace {
     Elf64_Ehdr header;
     elf_file.read(reinterpret_cast<char *>(&header), sizeof(header));
 
-    auto entry_file_address = header.e_entry;
-    auto load_bias          = GetSectionLoadBias(path, entry_file_address);
+    const auto entry_file_address = header.e_entry;
+    auto       load_bias = GetSectionLoadBias(path, entry_file_address);
 
     return entry_file_address - load_bias;
   }
@@ -576,4 +577,21 @@ TEST_CASE("Syscall catchpoint work", "[syscall]") {
   REQUIRE(reason.syscall_info->entry == false);
 
   close(dev_null);
+}
+
+TEST_CASE("ELF parser works", "[elf]") {
+  const auto path = "targets/hello_sdb";
+  sdb::Elf   elf(path);
+  // get the virtual address for the entry point
+  const auto entry = elf.GetHeader().e_entry;
+  auto       sym   = elf.GetSymbolAtAddress(sdb::FileAddress{elf, entry});
+  auto       name  = elf.GetString(sym.value()->st_name);
+  REQUIRE(name == "_start");
+
+  // pretend that the ELF is loaded at `0xcafecafe` and check that this mock
+  // addr + entry finds the '_start' symbol by address rather than offset
+  elf.NotifyLoaded(sdb::VirtualAddress{0xcafecafe});
+  sym  = elf.GetSymbolAtAddress(sdb::VirtualAddress{0xcafecafe + entry});
+  name = elf.GetString(sym.value()->st_name);
+  REQUIRE(name == "_start");
 }

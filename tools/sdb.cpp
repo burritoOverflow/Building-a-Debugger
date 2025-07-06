@@ -4,15 +4,16 @@
 #include <fmt/ranges.h>
 #include <iostream>
 #include <libsdb/disassembler.hpp>
+#include <libsdb/elf.hpp>
 #include <libsdb/error.hpp>
 #include <libsdb/parse.hpp>
 #include <libsdb/process.hpp>
+#include <libsdb/syscalls.hpp>
+#include <libsdb/target.hpp>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include "libsdb/syscalls.hpp"
 
 
 namespace {
@@ -99,17 +100,18 @@ namespace {
     return out;
   }
 
-  std::unique_ptr<sdb::Process> Attach(const int argc, char **argv) {
+  std::unique_ptr<sdb::Target> Attach(const int argc, char **argv) {
     if (argc == 3 &&
         argv[1] == std::string_view("-p")) {  // passing PID as argument
       const pid_t pid = std::atoi(argv[2]);
-      return sdb::Process::Attach(pid);
+      return sdb::Target::Attach(pid);
     }
+
     // Otherwise, passing program name
     const char *program_path = argv[1];
-    auto        proc         = sdb::Process::Launch(program_path);
-    fmt::print("Launched process with PID {}\n", proc->GetPid());
-    return proc;
+    auto        target       = sdb::Target::Launch(program_path);
+    fmt::print("Launched process with PID {}\n", target->GetProcess().GetPid());
+    return target;
   }
 
   std::string GetSigtrapInfo(const sdb::Process    &process,
@@ -167,7 +169,28 @@ namespace {
     }
   }
 
-  void PrintStopReason(const sdb::Process    &process,
+  std::string GetSignalStopReason(const sdb::Target     &target,
+                                  const sdb::StopReason &stop_reason) {
+    auto       &process = target.GetProcess();
+    std::string message = fmt::format("stopped by signal {} at {:#x}",
+                                      sigabbrev_np(stop_reason.info),
+                                      process.GetPc().GetAddress());
+
+    if (const auto func =
+            target.GetElf().GetSymbolContainingAddress(process.GetPc());
+        func && ELF64_ST_TYPE(func.value()->st_info) == STT_FUNC) {
+      message += fmt::format(" ({})",
+                             target.GetElf().GetString(func.value()->st_name));
+    }
+
+    if (stop_reason.info == SIGTRAP) {
+      message += GetSigtrapInfo(process, stop_reason);
+    }
+
+    return message;
+  }
+
+  void PrintStopReason(const sdb::Target     &target,
                        const sdb::StopReason &stop_reason) {
     std::string message;
 
@@ -181,22 +204,17 @@ namespace {
                               sigabbrev_np(stop_reason.info));
         break;
       case sdb::ProcessState::Stopped:
-        message = fmt::format("stopped by signal {} at {:#x}",
-                              sigabbrev_np(stop_reason.info),
-                              process.GetPc().GetAddress());
-        if (stop_reason.info == SIGTRAP) {
-          message += GetSigtrapInfo(process, stop_reason);
-        }
+        message = GetSignalStopReason(target, stop_reason);
         break;
       default:;
     }
 
-    fmt::print("Process {}: {}\n", process.GetPid(), message);
+    fmt::print("Process {}: {}\n", target.GetProcess().GetPid(), message);
   }
 
 
   void PrintDisassembly(sdb::Process &process, sdb::VirtualAddress address,
-                        std::size_t n_instructions) {
+                        const std::size_t n_instructions) {
     const sdb::Disassembler disassembler(process);
     auto instructions = disassembler.Disassemble(n_instructions, address);
     for (const auto &[address, text] : instructions) {
@@ -205,10 +223,10 @@ namespace {
     }
   }
 
-  void HandleStop(sdb::Process &process, const sdb::StopReason reason) {
-    PrintStopReason(process, reason);
+  void HandleStop(sdb::Target &target, const sdb::StopReason &reason) {
+    PrintStopReason(target, reason);
     if (reason.reason == sdb::ProcessState::Stopped) {
-      PrintDisassembly(process, process.GetPc(), 10);
+      PrintDisassembly(target.GetProcess(), target.GetProcess().GetPc(), 5);
     }
   }
 
@@ -642,15 +660,16 @@ namespace {
     PrintDisassembly(process, address, n_instructions);
   }
 
-  void HandleCommand(const std::unique_ptr<sdb::Process> &process,
-                     const std::string_view               line) {
+  void HandleCommand(const std::unique_ptr<sdb::Target> &target,
+                     const std::string_view              line) {
     const auto  args    = Split(line, ' ');
     const auto &command = args[0];
+    const auto  process = &target->GetProcess();
 
     if (IsPrefix(command, "continue")) {
       process->Resume();
       const auto reason = process->WaitOnSignal();
-      HandleStop(*process, reason);
+      HandleStop(*target, reason);
     } else if (IsPrefix(command, "memory")) {
       HandleMemoryCommand(*process, args);
     } else if (IsPrefix(command, "register")) {
@@ -661,7 +680,7 @@ namespace {
       HandleWatchpointCommand(*process, args);
     } else if (IsPrefix(command, "step")) {
       const auto reason = process->StepInstruction();
-      HandleStop(*process, reason);
+      HandleStop(*target, reason);
     } else if (IsPrefix(command, "help")) {
       PrintHelp(args);
     } else if (IsPrefix(command, "disassemble")) {
@@ -673,7 +692,7 @@ namespace {
     }
   }
 
-  void MainLoop(const std::unique_ptr<sdb::Process> &process) {
+  void MainLoop(const std::unique_ptr<sdb::Target> &target) {
     char *line = nullptr;
     while ((line = readline("sdb> ")) != nullptr) {
       // command to be executed, regardless of where it came from--either the
@@ -694,7 +713,7 @@ namespace {
 
       if (!line_string.empty()) {
         try {
-          HandleCommand(process, line_string);
+          HandleCommand(target, line_string);
         } catch (const sdb::Error &err) {
           std::cerr << err.what() << '\n';
         }
@@ -711,11 +730,11 @@ int main(const int argc, char **argv) {
   }
 
   try {
-    const auto process = Attach(argc, argv);
+    const auto target = Attach(argc, argv);
     // install the signal handler
-    g_sdb_process = process.get();
+    g_sdb_process = &target->GetProcess();
     signal(SIGINT, HandleSigint);
-    MainLoop(process);
+    MainLoop(target);
   } catch (const sdb::Error &err) {
     std::cerr << err.what() << '\n';
   }

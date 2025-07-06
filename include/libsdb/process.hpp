@@ -117,6 +117,10 @@ public:
           this->GetRegisters().ReadByIdAs<std::uint64_t>(RegisterID::rip)};
     }
 
+    // The auxiliary vector for a process is a set of identifier/value pairs
+    // that the kernel uses to provide information about a process to user space
+    std::unordered_map<int, std::uint64_t> GetAuxiliaryVector() const;
+
     std::variant<BreakpointSite::id_type, Watchpoint::id_type>
     GetCurrentHardwareStoppoint() const;
 

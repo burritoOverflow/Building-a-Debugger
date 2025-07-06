@@ -2,10 +2,14 @@
 #define SDB_TYPES_HPP
 
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <vector>
 
 namespace sdb {
+  class FileAddress;
+  class Elf;
+
   using byte64  = std::array<std::byte, 8>;
   using byte128 = std::array<std::byte, 16>;
 
@@ -60,8 +64,99 @@ public:
       return address_ >= other.address_;
     }
 
+    // convert the virtual address to a FileAddress for a given ELF file
+    FileAddress ToFileAddress(const Elf &obj) const;
+
 private:
     std::uint64_t address_ = 0;
+  };
+
+  /*
+   * Represents virtual addresses specified in the ELF file.
+   */
+  class FileAddress {
+public:
+    FileAddress() = default;
+    FileAddress(const Elf &obj, const uint64_t &addr) :
+        elf_(&obj), addr_(addr) {}
+
+    std::uint64_t GetAddress() const { return addr_; }
+    const Elf    *ElfFile() const { return elf_; }
+
+    FileAddress operator+(const std::uint64_t offset) const {
+      return FileAddress(*elf_, addr_ + offset);
+    }
+
+    FileAddress operator-(const std::uint64_t offset) const {
+      return FileAddress(*elf_, addr_ - offset);
+    }
+
+    FileAddress &operator+=(const std::uint64_t offset) {
+      addr_ += offset;
+      return *this;
+    }
+
+    FileAddress &operator-=(const std::uint64_t offset) {
+      addr_ -= offset;
+      return *this;
+    }
+
+    bool operator==(const FileAddress &other) const {
+      return addr_ == other.addr_ and elf_ == other.elf_;
+    }
+
+    bool operator!=(const FileAddress &other) const {
+      return addr_ != other.addr_ or elf_ != other.elf_;
+    }
+
+    // NOTE: in the following, all ELF pointers must be equal; relative
+    // comparison operators don't make sense if the ELF files for the address do
+    // not match.
+    bool operator<(const FileAddress &other) const {
+      assert(elf_ == other.elf_);
+      return addr_ < other.addr_;
+    }
+
+    bool operator<=(const FileAddress &other) const {
+      assert(elf_ == other.elf_);
+      return addr_ <= other.addr_;
+    }
+
+    bool operator>(const FileAddress &other) const {
+      assert(elf_ == other.elf_);
+      return addr_ > other.addr_;
+    }
+
+    bool operator>=(const FileAddress &other) const {
+      assert(elf_ == other.elf_);
+      return addr_ >= other.addr_;
+    }
+
+    VirtualAddress ToVirtualAddress(const Elf &obj) const;
+
+private:
+    const Elf    *elf_ = nullptr;
+    std::uint64_t addr_ =
+        0;  // this address is relative to the load address of this file
+  };
+
+  /*
+   * Stores an offset instead of an address
+   *
+   * Represents absolute offsets from the start of the object file
+   */
+  class FileOffset {
+public:
+    FileOffset() = default;
+    FileOffset(const Elf &obj, const uint64_t &offset) :
+        elf_(&obj), offset_(offset) {}
+
+    std::uint64_t GetOffset() const { return offset_; }
+    const Elf    *ElfFile() const { return elf_; }
+
+private:
+    const Elf    *elf_    = nullptr;
+    std::uint64_t offset_ = 0;
   };
 
   // represents a view of an existing region of memory
