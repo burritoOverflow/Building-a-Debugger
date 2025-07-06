@@ -37,12 +37,12 @@ void sdb::BreakpointSite::Enable() {
     }
 
     /*
-     * we just need the first 8 bits, so we bitwise and the data with '0xff'
-     * to get the last byte of the data. ("masking out" all the higher-order
-     * bits)
-     * i.e (0xe5894855fa1e0ff3 & 0xff) will give us '0xf3'
+     * we received 64-bits of data; we only need the first 8 bits, so we bitwise
+     * and the data with '0xff' to get the last byte of the data. ("masking out"
+     * all the higher-order bits) Example: (0xe5894855fa1e0ff3 & 0xff) will give
+     * us '0xf3'
      */
-    saved_data_ = static_cast<std::byte>(data & 0xff);
+    this->saved_data_ = static_cast<std::byte>(data & 0xff);
 
     // int3 instruction
     constexpr std::uint64_t int3 = 0xcc;

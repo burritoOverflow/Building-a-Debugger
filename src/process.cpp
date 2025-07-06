@@ -438,9 +438,11 @@ std::vector<std::byte> sdb::Process::ReadMemoryWithoutTraps(
       continue;  // skip disabled breakpoints
     }
 
-    // for each enabled site, we replace the int3 instruction at the add on
-    // which the breakpoint is set with the saved data.
-    auto offset                 = site->Address() - address.GetAddress();
+    // Restore the original instruction at the breakpoint address:
+    // for each enabled site, we replace the int3 instruction at the address on
+    // which the breakpoint is set with the saved data (the original
+    // instruction)
+    const auto offset           = site->Address() - address.GetAddress();
     memory[offset.GetAddress()] = site->saved_data_;  // restore the saved data
   }
   return memory;

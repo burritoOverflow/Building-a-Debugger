@@ -53,7 +53,8 @@ private:
     VirtualAddress address_;
     bool           is_enabled_;
     std::byte saved_data_;  // data we replace with the int3 instruction when
-                            // setting a breakpoint
+                            // setting a breakpoint; the aim is to save the
+                            // replaced instruction for restoration later
 
     bool is_hardware_;  // use hardware or software breakpoints
     bool is_internal_;
