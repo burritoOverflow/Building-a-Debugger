@@ -81,8 +81,10 @@ void sdb::BreakpointSite::Disable() {
       Error::SendErrno("Disabling breakpoint site failed");
     }
 
+    // `ptrace` operates on whole words rather than bytes, so we need to
+    // overwrite the low byte prior to writing it back to memory
     const auto restored_data =
-        ((data & -0xff) | static_cast<std::uint8_t>(saved_data_));
+        ((data & ~0xff) | static_cast<std::uint8_t>(saved_data_));
 
     // We restore the data masking the first byte with -0xff
     // and then bitwise ORing with the saved data
