@@ -216,7 +216,7 @@ namespace {
   void PrintDisassembly(sdb::Process &process, sdb::VirtualAddress address,
                         const std::size_t n_instructions) {
     const sdb::Disassembler disassembler(process);
-    auto instructions = disassembler.Disassemble(n_instructions, address);
+    const auto instructions = disassembler.Disassemble(n_instructions, address);
     for (const auto &[address, text] : instructions) {
       // add padding for vertical alignment
       fmt::print("{:#18x}: {}\n", address.GetAddress(), text);

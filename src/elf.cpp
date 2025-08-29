@@ -2,9 +2,9 @@
 #include <cxxabi.h>
 #include <fcntl.h>
 #include <libsdb/bit.hpp>
+#include <libsdb/dwarf.hpp>
 #include <libsdb/elf.hpp>
 #include <libsdb/error.hpp>
-#include <oneapi/tbb/task_arena.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -47,6 +47,8 @@ sdb::Elf::Elf(const std::filesystem::path& path) : path_(path) {
   this->BuildSectionMap();
   this->ParseSymbolTable();
   this->BuildSymbolMaps();
+
+  this->dwarf_ = std::make_unique<sdb::Dwarf>(*this);
 }
 
 sdb::Elf::~Elf() {
@@ -229,7 +231,7 @@ void sdb::Elf::ParseSectionHeaders() {
   auto n_headers = this->header_.e_shnum;
   if (n_headers == 0 && this->header_.e_shentsize != 0) {
     // If the file specifies the number of headers as 0, but also specifies the
-    // section header size element we've reached this limit (therefore, there
+    // section header size element, we've reached this limit (therefore, there
     // must be more than 0xff00 sections).
 
     // So, we read the sh_size field of the first section
@@ -242,10 +244,10 @@ void sdb::Elf::ParseSectionHeaders() {
   this->section_headers_.resize(n_headers);
 
   // copy the section headers from the mapped memory to the vector
-  std::copy(this->data_ + this->header_.e_shoff,
-            this->data_ + this->header_.e_shoff +
-                sizeof(Elf64_Shdr) * this->header_.e_shnum,
-            reinterpret_cast<std::byte*>(this->section_headers_.data()));
+  std::copy(
+      this->data_ + this->header_.e_shoff,
+      this->data_ + this->header_.e_shoff + sizeof(Elf64_Shdr) * n_headers,
+      reinterpret_cast<std::byte*>(this->section_headers_.data()));
 }
 
 void sdb::Elf::ParseSymbolTable() {

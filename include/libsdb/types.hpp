@@ -159,7 +159,7 @@ private:
     std::uint64_t offset_ = 0;
   };
 
-  // represents a view of an existing region of memory
+  // represents a view to an existing region of memory
   template <class T>
   class Span {
 public:
@@ -175,8 +175,8 @@ public:
     explicit Span(const std::vector<U> &vec) :
         data_(vec.data()), size_(vec.size()) {}
 
-    T          *begin() { return data_; }
-    T          *end() { return data_ + size_; }
+    T          *begin() const { return data_; }
+    T          *end() const { return data_ + size_; }
     std::size_t Size() const { return size_; }
     T          &operator[](std::size_t n) { return *(data_ + n); }
 

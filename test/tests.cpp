@@ -5,6 +5,7 @@
 #include <fstream>
 #include <libsdb/bit.hpp>
 #include <libsdb/breakpoint_site.hpp>
+#include <libsdb/dwarf.hpp>
 #include <libsdb/elf.hpp>
 #include <libsdb/error.hpp>
 #include <libsdb/pipe.hpp>
@@ -594,4 +595,52 @@ TEST_CASE("ELF parser works", "[elf]") {
   sym  = elf.GetSymbolAtAddress(sdb::VirtualAddress{0xcafecafe + entry});
   name = elf.GetString(sym.value()->st_name);
   REQUIRE(name == "_start");
+}
+
+TEST_CASE("Correct DWARF language", "[dwarf]") {
+  const auto path = "targets/hello_sdb";
+  sdb::Elf   elf(path);
+  auto      &compilation_units = elf.GetDwarf().CompileUnits();
+  REQUIRE(compilation_units.size() == 1);
+
+  auto      &cu   = compilation_units[0];
+  const auto lang = cu->GetRoot()[DW_AT_language].AsInt();
+  REQUIRE(lang == DW_LANG_C_plus_plus);
+}
+
+TEST_CASE("Iterate DWARF", "[dwarf]") {
+  const auto path = "targets/hello_sdb";
+  sdb::Elf   elf(path);
+  auto      &compilation_units = elf.GetDwarf().CompileUnits();
+  REQUIRE(compilation_units.size() == 1);
+
+  auto       &cu    = compilation_units[0];
+  std::size_t count = 0;
+
+  for (auto &d : cu->GetRoot().Children()) {
+    const auto a = d.GetAbbrevEntry();
+    REQUIRE(a->code != 0);
+    ++count;
+  }
+  REQUIRE(count > 0);
+}
+
+TEST_CASE("Find main", "[dwarf]") {
+  auto       path = "targets/multi_cu";
+  sdb::Elf   elf(path);
+  sdb::Dwarf dwarf(elf);
+
+  bool found = false;
+  for (auto &cu : dwarf.CompileUnits()) {
+    for (auto &die : cu->GetRoot().Children()) {
+      if (die.GetAbbrevEntry()->tag == DW_TAG_subprogram &&
+          die.Contains(DW_AT_name)) {
+        auto name = die[DW_AT_name].AsString();
+        if (name == "main") {
+          found = true;
+        }
+      }
+    }
+  }
+  REQUIRE(found);
 }

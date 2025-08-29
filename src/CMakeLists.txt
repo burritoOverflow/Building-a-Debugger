@@ -6,6 +6,7 @@ add_library(libsdb process.cpp
         watchpoint.cpp
         syscalls.cpp
         elf.cpp
+        dwarf.cpp
         target.cpp
         types.cpp)
 

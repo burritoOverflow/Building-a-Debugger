@@ -12,8 +12,12 @@ namespace sdb {
   template <class I>
   std::optional<I> ToIntegral(std::string_view sv, int base = 10) {
     auto begin = sv.begin();
+
+    const bool is_hex =
+        base == 16 && sv.size() > 1 && begin[0] == '0' && begin[1] == 'x';
+
     // skip past the leading '0x' for hexadecimal if present
-    if (base == 16 && sv.size() > 1 && begin[0] == '0' && begin[1] == 'x') {
+    if (is_hex) {
       begin += 2;
     }
 
@@ -39,9 +43,9 @@ namespace sdb {
 
   template <class F>
   std::optional<F> ToFloat(std::string_view sv) {
-    F          ret;
-    const auto result = std::from_chars(sv.begin(), sv.end(), ret);
-    if (result.ptr != sv.end()) {
+    F ret;
+    if (const auto result = std::from_chars(sv.begin(), sv.end(), ret);
+        result.ptr != sv.end()) {
       return std::nullopt;
     }
     return ret;

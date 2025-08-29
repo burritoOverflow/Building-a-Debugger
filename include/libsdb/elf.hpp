@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace sdb {
+  class Dwarf;
   class Elf {
 public:
     // path to an elf file on disk
@@ -22,6 +23,9 @@ public:
     std::filesystem::path GetPath() const { return this->path_; }
 
     const Elf64_Ehdr &GetHeader() const { return this->header_; }
+
+    Dwarf       &GetDwarf() { return *this->dwarf_; }
+    const Dwarf &GetDwarf() const { return *this->dwarf_; }
 
     // retrieve a string from the string given an index
     std::string_view GetString(std::size_t index) const;
@@ -74,6 +78,7 @@ private:
     Elf64_Ehdr              header_;
     std::vector<Elf64_Shdr> section_headers_;
     std::vector<Elf64_Sym>  symbol_table_;
+    std::unique_ptr<Dwarf>  dwarf_;
 
     // the load bias is used to translate between virtual addresses and file
     // addresses
