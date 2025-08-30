@@ -644,3 +644,53 @@ TEST_CASE("Find main", "[dwarf]") {
   }
   REQUIRE(found);
 }
+
+TEST_CASE("Range list", "[dwarf]") {
+  const auto path = "targets/hello_sdb";
+  sdb::Elf   elf(path);
+  sdb::Dwarf dwarf(elf);
+  auto      &cu = dwarf.CompileUnits()[0];
+
+  /*
+   * A range list that consists of a regular entity, a base address selector,
+   * another regular entity, and a end-of-list indicator.
+   */
+  std::vector<std::uint64_t> range_data{0x12341234, 0x12341236, ~0ULL, 0x32,
+                                        0x12341234, 0x12341236, 0x0,   0x0};
+
+  auto           bytes = reinterpret_cast<std::byte *>(range_data.data());
+  sdb::RangeList range_list(cu.get(), {bytes, bytes + range_data.size()},
+                            sdb::FileAddress{});
+
+  // The first entry should have low address 0x12341234 and high address
+  // 0x12341236 (i.e it should contain 0x12341234 and 0x12341253, but not
+  // 0x12341236)
+  auto it = range_list.Begin();
+  auto e1 = *it;
+  REQUIRE(e1.low.GetAddress() == 0x12341234);
+  REQUIRE(e1.high.GetAddress() == 0x12341236);
+  REQUIRE(e1.Contains(sdb::FileAddress{elf, 0x12341234}));
+  REQUIRE(e1.Contains(sdb::FileAddress{elf, 0x12341235}));
+  REQUIRE(!e1.Contains(sdb::FileAddress{elf, 0x12341236}));
+
+  // second entry: values are the same as in the first, but the base address
+  // selector of 0x32 they should be offset by 0x32
+  ++it;
+  auto e2 = *it;
+  REQUIRE(e2.low.GetAddress() == 0x12341266);
+  REQUIRE(e2.high.GetAddress() == 0x12341268);
+  REQUIRE(e2.Contains(sdb::FileAddress{elf, 0x12341266}));
+  REQUIRE(e2.Contains(sdb::FileAddress{elf, 0x12341267}));
+  REQUIRE(!e2.Contains(sdb::FileAddress{elf, 0x12341268}));
+
+  ++it;
+  REQUIRE(it == range_list.End());
+
+  // again verify contains works as intended
+  REQUIRE(range_list.Contains(sdb::FileAddress{elf, 0x12341234}));
+  REQUIRE(range_list.Contains(sdb::FileAddress{elf, 0x12341235}));
+  REQUIRE(!range_list.Contains(sdb::FileAddress{elf, 0x12341236}));
+  REQUIRE(range_list.Contains(sdb::FileAddress{elf, 0x12341266}));
+  REQUIRE(range_list.Contains(sdb::FileAddress{elf, 0x12341267}));
+  REQUIRE(!range_list.Contains(sdb::FileAddress{elf, 0x12341268}));
+}

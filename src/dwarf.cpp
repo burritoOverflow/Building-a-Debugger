@@ -353,7 +353,7 @@ sdb::RangeList::Iterator::Iterator(const CompileUnit    *compile_unit,
 
 sdb::RangeList::Iterator &sdb::RangeList::Iterator::operator++() {
   const auto     elf = this->compile_unit_->DwarfInfo()->ElfFile();
-  constexpr auto base_address_flag = -static_cast<std::int64_t>(0);
+  constexpr auto base_address_flag = ~static_cast<std::int64_t>(0);
 
   Cursor cursor({this->pos_, this->data_.end()});
 
@@ -385,7 +385,7 @@ sdb::RangeList::Iterator &sdb::RangeList::Iterator::operator++() {
 }
 
 sdb::RangeList::Iterator sdb::RangeList::Iterator::operator++(int) {
-  auto tmp = *this;
+  const auto tmp = *this;
   ++(*this);
   return tmp;
 }
