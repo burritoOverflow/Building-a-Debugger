@@ -282,6 +282,7 @@ void sdb::Elf::BuildSectionMap() {
 }
 
 void sdb::Elf::BuildSymbolMaps() {
+  // get every symbol from the symbol table and attempt to demangle its name
   for (auto& symbol : this->symbol_table_) {
     const auto mangled_name = GetString(symbol.st_name);
     int        demangle_status;
@@ -289,16 +290,20 @@ void sdb::Elf::BuildSymbolMaps() {
     const auto demangled_name = abi::__cxa_demangle(
         mangled_name.data(), nullptr, nullptr, &demangle_status);
 
+    // if demangling was successful, add an entry for the demangled name
     if (demangle_status == 0) {
       this->symbol_name_map_.insert({demangled_name, &symbol});
+      // and free the demangled name string
       free(demangled_name);
     }
 
     // add an entry regardless for the mangled name
     this->symbol_name_map_.insert({mangled_name, &symbol});
 
+    // has and address and a name
     if (symbol.st_value != 0 && symbol.st_name != 0 &&
-        ELF64_ST_TYPE(symbol.st_info) != STT_TLS) {  // not thread-local storage
+        ELF64_ST_TYPE(symbol.st_info) !=
+            STT_TLS) {  // and is not thread-local storage
       const auto address_range =
           std::pair(FileAddress{*this, symbol.st_value},
                     FileAddress{*this, symbol.st_value + symbol.st_size});
